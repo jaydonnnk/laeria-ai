@@ -15,6 +15,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// Mirrors backend core/models.py SourceThread.
+export interface SourceThread {
+  id: string;
+  subreddit: string;
+  title: string;
+  url: string;
+  score: number;
+  num_comments: number;
+}
+
 // Mirrors backend core/models.py ResearchBrief.
 export interface SignalQuality {
   subreddits_checked: string[];
@@ -31,6 +41,7 @@ export interface ResearchBrief {
   red_flags: string[];
   confidence: "high" | "moderate" | "low";
   signal_quality: SignalQuality;
+  sources: SourceThread[];
 }
 
 // Mirrors backend core/models.py OutcomeSummary.
@@ -45,6 +56,7 @@ export interface OutcomeSummary {
   sample_bias: string;
   confidence: "high" | "moderate" | "low";
   thin_coverage: boolean;
+  sources: SourceThread[];
 }
 
 export const api = {

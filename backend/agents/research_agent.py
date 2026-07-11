@@ -18,6 +18,7 @@ from core.models import (
     RedditThread,
     ResearchBrief,
     SignalQuality,
+    SourceThread,
 )
 from services.llm import LLMService
 from services.reddit import RedditService
@@ -32,14 +33,20 @@ _MAX_SUBREDDITS = 4
 
 _IDENTIFY_SYSTEM = """You identify which subreddits hold the best first-hand \
 human discussion for a research query. Respond with JSON only:
-{"subreddits": ["name1", "name2", ...], "search_query": "..."}
+{"subreddits": ["name1", "name2", ...], "search_queries": ["...", "...", "..."]}
 
 Rules:
 - 2 to 4 subreddits, real and active, no /r/ prefix.
 - Prefer niche communities with deep expertise over huge generic ones
   (r/BuyItForLife over r/AskReddit; r/SuggestALaptop over r/technology).
-- "search_query": the 2-5 word phrase most likely used in relevant thread
-  titles. Not the user's full sentence — the community's phrasing."""
+- "search_queries": 2-3 DIFFERENT short phrases (2-5 words each) that relevant
+  thread titles would actually contain. Vary the wording — different product
+  names/aliases, category terms, and community slang — because Reddit search
+  is literal keyword matching and a single phrasing misses threads.
+  Example for "is the Steam Deck worth buying": ["steam deck worth it",
+  "steam deck review", "handheld gaming pc"].
+- If the query names a product/model that does not actually exist (a mistaken
+  name), include the closest real names in the variants."""
 
 _SYNTHESIS_SYSTEM = """You synthesise Reddit discussions into an honest \
 research brief for a purchase/decision. You are working from real thread \
@@ -129,29 +136,36 @@ class ResearchAgent:
         thread_budget = full thread+comment fetches (the slow, paced part).
         8 threads ≈ 8 requests ≈ 15-20s of Reddit time plus 2 LLM calls.
         """
-        # 1. Identify where to look (LLM).
+        # 1. Identify where to look (LLM) — including 2-3 query phrasings,
+        #    because Reddit search is literal keyword matching.
         plan = self._identify_subreddits(query)
         subreddits = plan["subreddits"][:_MAX_SUBREDDITS]
-        search_query = plan["search_query"]
-        logger.info("research plan: subs=%s query=%r", subreddits, search_query)
+        search_queries = plan["search_queries"]
+        logger.info("research plan: subs=%s queries=%s", subreddits, search_queries)
 
-        # 2. Search each subreddit (cheap, 1 request each).
+        # 2. Search every phrasing in every subreddit (cheap, 1 request each),
+        #    dedupe across variants.
         candidates: list[RedditThread] = []
         for sub in subreddits:
-            candidates.extend(
-                self._reddit.search_subreddit(
-                    sub, search_query, time_filter="year", limit=_SEARCH_LIMIT_PER_SUB
+            for sq in search_queries:
+                candidates.extend(
+                    self._reddit.search_subreddit(
+                        sub, sq, time_filter="year", limit=_SEARCH_LIMIT_PER_SUB
+                    )
                 )
-            )
         if not candidates:
-            # Retry once with the user's own words across the same subs.
-            logger.info("no hits for %r; retrying with raw query", search_query)
+            # Retry once with the user's own words, all-time, across the subs.
+            logger.info("no hits for %s; retrying with raw query", search_queries)
             for sub in subreddits:
                 candidates.extend(
                     self._reddit.search_subreddit(
                         sub, query, time_filter="all", limit=_SEARCH_LIMIT_PER_SUB
                     )
                 )
+        seen_ids: set[str] = set()
+        candidates = [
+            t for t in candidates if not (t.id in seen_ids or seen_ids.add(t.id))
+        ]
         if not candidates:
             return _empty_brief(subreddits, "No Reddit threads found for this query.")
 
@@ -177,12 +191,16 @@ class ResearchAgent:
 
     def _identify_subreddits(self, query: str) -> dict:
         raw = self._llm.complete_json(
-            _IDENTIFY_SYSTEM, f"Research query: {query}", max_tokens=300
+            _IDENTIFY_SYSTEM, f"Research query: {query}", max_tokens=400
         )
         subs = [s.strip().removeprefix("r/") for s in raw.get("subreddits", []) if s.strip()]
         if not subs:
             raise ValueError(f"LLM returned no subreddits for query: {query!r}")
-        return {"subreddits": subs, "search_query": raw.get("search_query") or query}
+        queries = [q.strip() for q in raw.get("search_queries", []) if str(q).strip()]
+        # Tolerate old-style single search_query responses.
+        if not queries and raw.get("search_query"):
+            queries = [str(raw["search_query"])]
+        return {"subreddits": subs, "search_queries": (queries or [query])[:3]}
 
     def _synthesise(
         self, query: str, threads: list[RedditThread], subreddits: list[str]
@@ -216,6 +234,7 @@ class ResearchAgent:
                 date_range=date_range,
                 bias_notes=raw.get("bias_notes", ""),
             ),
+            sources=_to_sources(threads),
         )
 
     # ---- Mode 1 (Phase 2) ----
@@ -237,14 +256,17 @@ class ResearchAgent:
         """
         query = f"{decision} ({context})" if context else decision
 
-        # 1. Where to look + the community's phrasing of the topic.
+        # 1. Where to look + the community's phrasings of the topic.
         plan = self._identify_subreddits(query)
         subreddits = plan["subreddits"][:_MAX_SUBREDDITS]
-        topic = plan["search_query"]
-        logger.info("retrospective plan: subs=%s topic=%r", subreddits, topic)
+        topics = plan["search_queries"]
+        logger.info("retrospective plan: subs=%s topics=%s", subreddits, topics)
 
-        # 2. Template search for outcome-shaped posts.
-        candidates = self._reddit.search_retrospective(topic, subreddits)
+        # 2. Template search for outcome-shaped posts (primary phrasing for
+        #    the per-sub templates; every phrasing gets a site-wide pass).
+        candidates = self._reddit.search_retrospective(
+            topics[0], subreddits, extra_topics=topics[1:]
+        )
         if not candidates:
             return _empty_outcomes("No candidate posts found for this decision.")
 
@@ -280,6 +302,7 @@ class ResearchAgent:
         summary.thin_coverage = thin
         if thin:
             summary.confidence = ConfidenceLevel.LOW
+        summary.sources = _to_sources(full_threads)
         return summary
 
     def _classify_retrospectives(
@@ -369,6 +392,22 @@ def _build_corpus(threads: list[RedditThread]) -> str:
             lines.append(f"COMMENT: {c[:600]}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def _to_sources(threads: list[RedditThread]) -> list[SourceThread]:
+    """Threads the synthesis actually used, as user-facing citations with
+    canonical reddit.com links."""
+    return [
+        SourceThread(
+            id=t.id,
+            subreddit=t.subreddit,
+            title=t.title,
+            url=f"https://www.reddit.com/comments/{t.id}/",
+            score=t.score,
+            num_comments=t.num_comments,
+        )
+        for t in threads
+    ]
 
 
 def _safe_confidence(value: object) -> ConfidenceLevel:

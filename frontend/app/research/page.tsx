@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api, OutcomeSummary } from "../../lib/api";
+import { Sources } from "../../components/Sources";
 
 const CONFIDENCE_COLOR: Record<string, string> = {
   high: "#1a7f37",
@@ -144,6 +145,8 @@ function OutcomesCard({ s }: { s: OutcomeSummary }) {
           <p style={{ margin: 0, color: "#555" }}>{s.sample_bias}</p>
         </div>
       )}
+
+      <Sources sources={s.sources} />
     </div>
   );
 }

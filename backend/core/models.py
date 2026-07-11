@@ -64,6 +64,19 @@ class RedditThread(BaseModel):
     top_comments: list[str] = Field(default_factory=list)
 
 
+# ---- Shared: source threads shown to the user ----
+
+class SourceThread(BaseModel):
+    """A thread the agent actually read and synthesised from — surfaced in the
+    UI so the user can verify the evidence themselves."""
+    id: str
+    subreddit: str
+    title: str
+    url: str            # canonical www.reddit.com link
+    score: int = 0
+    num_comments: int = 0
+
+
 # ---- Mode 2: Decision synthesis ----
 
 class SignalQuality(BaseModel):
@@ -81,6 +94,7 @@ class ResearchBrief(BaseModel):
     red_flags: list[str] = Field(default_factory=list)
     confidence: ConfidenceLevel = ConfidenceLevel.MODERATE
     signal_quality: SignalQuality = Field(default_factory=SignalQuality)
+    sources: list[SourceThread] = Field(default_factory=list)
 
 
 # ---- Mode 1: Retrospective outcomes ----
@@ -96,6 +110,7 @@ class OutcomeSummary(BaseModel):
     sample_bias: str = ""
     confidence: ConfidenceLevel = ConfidenceLevel.MODERATE
     thin_coverage: bool = False
+    sources: list[SourceThread] = Field(default_factory=list)
 
 
 # ---- Mode 3: Monitoring ----

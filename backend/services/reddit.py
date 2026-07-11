@@ -275,15 +275,20 @@ class RedditService:
     )
 
     def search_retrospective(
-        self, topic: str, subreddits: list[str], per_search_limit: int = 10
+        self,
+        topic: str,
+        subreddits: list[str],
+        per_search_limit: int = 10,
+        extra_topics: list[str] | None = None,
     ) -> list[RedditThread]:
         """Hunt update/outcome posts about a decision across subreddits.
 
-        Runs each retrospective query template against each subreddit, plus a
-        site-wide pass of the strongest template, then dedupes. Results are
-        CANDIDATES — titles matching retrospective phrasing — and still need
-        LLM classification (a title like "X worth it?" is usually a
-        prospective question, not an outcome report).
+        Runs each retrospective query template against each subreddit for the
+        primary topic phrasing, plus site-wide passes for the primary and any
+        extra phrasings, then dedupes. Results are CANDIDATES — titles
+        matching retrospective phrasing — and still need LLM classification
+        (a title like "X worth it?" is usually a prospective question, not an
+        outcome report).
         """
         candidates: list[RedditThread] = []
         for sub in subreddits:
@@ -296,11 +301,11 @@ class RedditService:
                         limit=per_search_limit,
                     )
                 )
-        # Site-wide pass: update posts often live outside the obvious subs
-        # (r/self, r/TrueOffMyChest, niche subs the LLM didn't name).
-        candidates.extend(
-            self._search_all(f"{topic} update", limit=per_search_limit)
-        )
+        # Site-wide passes: update posts often live outside the obvious subs
+        # (r/self, r/TrueOffMyChest, niche subs the LLM didn't name). Extra
+        # topic phrasings counter Reddit search's literal keyword matching.
+        for t in [topic, *(extra_topics or [])]:
+            candidates.extend(self._search_all(f"{t} update", limit=per_search_limit))
 
         seen: set[str] = set()
         unique = [t for t in candidates if not (t.id in seen or seen.add(t.id))]
