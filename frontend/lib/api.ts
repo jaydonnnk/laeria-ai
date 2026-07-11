@@ -48,6 +48,7 @@ export interface ResearchBrief {
 // Mirrors backend core/models.py OutcomeSummary.
 export interface OutcomeSummary {
   retrospective_count: number;
+  threads_read: number;
   pct_positive: number;
   pct_negative: number;
   pct_mixed: number;

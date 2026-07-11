@@ -72,6 +72,8 @@ Rules — these are integrity constraints, not suggestions:
   to seem rigorous, and do not pad strengths to seem balanced: report what is
   actually there, in proportion.
 - Weight by upvotes: a [200 pts] comment outweighs five [2 pts] comments.
+  "[score hidden]" means the score isn't public yet (recent comment) — judge
+  those by content, don't treat them as zero-vote.
 - Be suspicious of coordinated praise: same product named with unusual polish
   across unrelated threads, or praised only in low-score comments -> mention in
   red_flags and lower confidence.
@@ -217,6 +219,19 @@ class ResearchAgent:
             f"Research query: {query}\n\nThread excerpts:\n\n{corpus}",
             max_tokens=2000,
         )
+        # Guard against a transient model flake: valid JSON with every field
+        # blank despite having real threads to work from. One retry.
+        if not any(
+            raw.get(k)
+            for k in ("consensus_pick", "strengths", "failure_modes",
+                      "alternatives", "red_flags", "bias_notes")
+        ):
+            logger.warning("synthesis returned all-empty fields; retrying once")
+            raw = self._llm.complete_json(
+                _SYNTHESIS_SYSTEM,
+                f"Research query: {query}\n\nThread excerpts:\n\n{corpus}",
+                max_tokens=2000,
+            )
         dates = [t.created_utc for t in threads if t.created_utc]
         date_range = ""
         if dates:
@@ -292,9 +307,7 @@ class ResearchAgent:
             )
 
         # 4. Read the strongest retrospectives in full.
-        chosen = sorted(
-            retro_candidates, key=lambda t: (t.score, t.num_comments), reverse=True
-        )[:thread_budget]
+        chosen = sorted(retro_candidates, key=_engagement_key, reverse=True)[:thread_budget]
         full_threads: list[RedditThread] = []
         for t in chosen:
             try:
@@ -317,16 +330,21 @@ class ResearchAgent:
     ) -> set[str]:
         """One batched LLM call: which candidate titles are genuine
         retrospective outcome reports (not prospective questions)?"""
-        lines = "\n".join(
-            f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in candidates[:60]
-        )
+        # Cap the batch at 60 titles — but rank by engagement first, so the
+        # cut drops the weakest candidates instead of whichever subreddit
+        # happened to be searched last.
+        batch = sorted(candidates, key=_engagement_key, reverse=True)[:60]
+        lines = "\n".join(f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in batch)
         raw = self._llm.complete_json(
             _CLASSIFY_SYSTEM,
             f"Decision being researched: {decision}\n\nCandidate posts:\n{lines}",
             max_tokens=1500,
         )
         ids = raw.get("retrospective_ids", [])
-        return {str(i) for i in ids if isinstance(i, (str, int))}
+        # Models sometimes echo ids with the t3_ fullname prefix — normalise.
+        return {
+            str(i).removeprefix("t3_") for i in ids if isinstance(i, (str, int))
+        }
 
     def _synthesise_outcomes(
         self, decision: str, threads: list[RedditThread], retro_count: int
@@ -342,6 +360,7 @@ class ResearchAgent:
         pct = raw.get("outcome_split", {})
         return OutcomeSummary(
             retrospective_count=retro_count,
+            threads_read=len(threads),
             pct_positive=float(pct.get("positive", 0.0)),
             pct_negative=float(pct.get("negative", 0.0)),
             pct_mixed=float(pct.get("mixed", 0.0)),
@@ -355,11 +374,19 @@ class ResearchAgent:
 
 # ---- module helpers ----
 
+def _engagement_key(t: RedditThread) -> int:
+    """Ranking signal for search-page candidates. Search-page scores are
+    unreliable (often 0) and comment counts alone favour controversy — a
+    400-comment flame war would outrank a 2000-pt beloved guide. Summing both
+    lets a real score dominate when present and comments carry the rest."""
+    return t.score + t.num_comments
+
+
 def _spread_pick(candidates: list[RedditThread], budget: int) -> list[RedditThread]:
     """Pick up to `budget` threads, round-robin across subreddits in
     engagement order, so one big subreddit doesn't crowd out the others."""
     by_sub: dict[str, list[RedditThread]] = {}
-    for t in sorted(candidates, key=lambda t: (t.num_comments, t.score), reverse=True):
+    for t in sorted(candidates, key=_engagement_key, reverse=True):
         by_sub.setdefault(t.subreddit, []).append(t)
 
     picked: list[RedditThread] = []

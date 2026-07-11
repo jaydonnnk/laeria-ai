@@ -133,6 +133,46 @@ class RedditService:
 
     # ---- Phase 1: data access ----
 
+    def _parse_search_page(
+        self, html: str, limit: int, subreddit: str | None = None
+    ) -> list[RedditThread]:
+        """Shared parser for subreddit-restricted and site-wide search pages.
+        When `subreddit` is None it's read from each result's own link."""
+        soup = BeautifulSoup(html, "lxml")
+        threads: list[RedditThread] = []
+        for el in soup.select("div.search-result-link")[:limit]:
+            fullname = el.attrs.get("data-fullname", "")
+            if not fullname.startswith("t3_"):
+                continue
+            title_a = el.select_one("a.search-title")
+            time_el = el.select_one("time")
+            if subreddit is None:
+                sub_a = el.select_one("a.search-subreddit-link")
+                sub = sub_a.get_text(strip=True).removeprefix("r/") if sub_a else ""
+            else:
+                sub = subreddit
+            threads.append(
+                RedditThread(
+                    id=fullname.removeprefix("t3_"),
+                    subreddit=sub,
+                    title=title_a.get_text(strip=True) if title_a else "",
+                    url=(title_a.attrs.get("href", "") if title_a else ""),
+                    score=self._parse_points(
+                        el.select_one(".search-score").get_text()
+                        if el.select_one(".search-score")
+                        else None
+                    ),
+                    num_comments=self._parse_count(
+                        el.select_one("a.search-comments").get_text()
+                        if el.select_one("a.search-comments")
+                        else None
+                    ),
+                    created_utc=_iso_to_utc(time_el.attrs.get("datetime")) if time_el else 0.0,
+                    author_account_age_days=None,  # not available in HTML
+                )
+            )
+        return threads
+
     def search_subreddit(
         self, subreddit: str, query: str, time_filter: str = "year", limit: int = 25
     ) -> list[RedditThread]:
@@ -155,35 +195,7 @@ class RedditService:
             logger.warning("search r/%s -> HTTP %s", subreddit, exc.response.status_code)
             return []
 
-        soup = BeautifulSoup(resp.text, "lxml")
-        threads: list[RedditThread] = []
-        for el in soup.select("div.search-result-link")[:limit]:
-            fullname = el.attrs.get("data-fullname", "")
-            if not fullname.startswith("t3_"):
-                continue
-            title_a = el.select_one("a.search-title")
-            time_el = el.select_one("time")
-            author_a = el.select_one("a.author")
-            threads.append(
-                RedditThread(
-                    id=fullname.removeprefix("t3_"),
-                    subreddit=subreddit,
-                    title=title_a.get_text(strip=True) if title_a else "",
-                    url=(title_a.attrs.get("href", "") if title_a else ""),
-                    score=self._parse_points(
-                        el.select_one(".search-score").get_text()
-                        if el.select_one(".search-score")
-                        else None
-                    ),
-                    num_comments=self._parse_count(
-                        el.select_one("a.search-comments").get_text()
-                        if el.select_one("a.search-comments")
-                        else None
-                    ),
-                    created_utc=_iso_to_utc(time_el.attrs.get("datetime")) if time_el else 0.0,
-                    author_account_age_days=None,  # not available in HTML
-                )
-            )
+        threads = self._parse_search_page(resp.text, limit, subreddit=subreddit)
         logger.info("search r/%s %r -> %d results", subreddit, query, len(threads))
         return threads
 
@@ -213,9 +225,15 @@ class RedditService:
             body = body_el.get_text(" ", strip=True)
             if not body:
                 continue
+            # Recent threads hide comment scores; render those as unknown
+            # rather than "[0 pts]" so the synthesis prompt's upvote weighting
+            # doesn't systematically discount fresh comments.
             score_el = cm.select_one("span.score.unvoted")
-            points = self._parse_points(score_el.get_text() if score_el else None)
-            comments.append(f"[{points} pts] {body}")
+            if score_el is None:
+                comments.append(f"[score hidden] {body}")
+            else:
+                points = self._parse_points(score_el.get_text())
+                comments.append(f"[{points} pts] {body}")
             if len(comments) >= max_comments:
                 break
 
@@ -325,38 +343,7 @@ class RedditService:
         except httpx.HTTPStatusError as exc:
             logger.warning("site-wide search -> HTTP %s", exc.response.status_code)
             return []
-
-        soup = BeautifulSoup(resp.text, "lxml")
-        threads: list[RedditThread] = []
-        for el in soup.select("div.search-result-link")[:limit]:
-            fullname = el.attrs.get("data-fullname", "")
-            if not fullname.startswith("t3_"):
-                continue
-            title_a = el.select_one("a.search-title")
-            sub_a = el.select_one("a.search-subreddit-link")
-            sub = sub_a.get_text(strip=True).removeprefix("r/") if sub_a else ""
-            time_el = el.select_one("time")
-            threads.append(
-                RedditThread(
-                    id=fullname.removeprefix("t3_"),
-                    subreddit=sub,
-                    title=title_a.get_text(strip=True) if title_a else "",
-                    url=(title_a.attrs.get("href", "") if title_a else ""),
-                    score=self._parse_points(
-                        el.select_one(".search-score").get_text()
-                        if el.select_one(".search-score")
-                        else None
-                    ),
-                    num_comments=self._parse_count(
-                        el.select_one("a.search-comments").get_text()
-                        if el.select_one("a.search-comments")
-                        else None
-                    ),
-                    created_utc=_iso_to_utc(time_el.attrs.get("datetime")) if time_el else 0.0,
-                    author_account_age_days=None,
-                )
-            )
-        return threads
+        return self._parse_search_page(resp.text, limit, subreddit=None)
 
 
 def _iso_to_utc(iso: str | None) -> float:

@@ -101,7 +101,8 @@ class ResearchBrief(BaseModel):
 # ---- Mode 1: Retrospective outcomes ----
 
 class OutcomeSummary(BaseModel):
-    retrospective_count: int = 0
+    retrospective_count: int = 0    # outcome reports identified by the classifier
+    threads_read: int = 0           # of those, read in full — the split is based on THESE
     pct_positive: float = 0.0
     pct_negative: float = 0.0
     pct_mixed: float = 0.0

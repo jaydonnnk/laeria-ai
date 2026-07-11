@@ -96,8 +96,9 @@ function OutcomesCard({ s }: { s: OutcomeSummary }) {
       <div style={sectionStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <h2 style={{ margin: 0 }}>
-            Based on {s.retrospective_count} outcome report
-            {s.retrospective_count === 1 ? "" : "s"}
+            {s.retrospective_count} outcome report
+            {s.retrospective_count === 1 ? "" : "s"} found · {s.threads_read} read
+            in full
           </h2>
           <span
             style={{
@@ -132,6 +133,10 @@ function OutcomesCard({ s }: { s: OutcomeSummary }) {
           <span style={{ color: "#1a7f37" }}>■</span> glad they did it&ensp;
           <span style={{ color: "#9a6700" }}>■</span> mixed&ensp;
           <span style={{ color: "#cf222e" }}>■</span> regret it
+          <span style={{ display: "block", marginTop: 4 }}>
+            Split reflects the {s.threads_read} reports read in full, not all{" "}
+            {s.retrospective_count} found.
+          </span>
         </p>
       </div>
 

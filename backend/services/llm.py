@@ -59,34 +59,45 @@ class LLMService:
         )
         return resp.choices[0].message.content or ""
 
+    # Set to False the first time json mode comes back empty/broken for this
+    # process's model, so subsequent calls skip the wasted request entirely.
+    _json_mode_usable: bool = True
+
     def complete_json(
         self, system: str, user: str, max_tokens: int = 4000, temperature: float = 0.2
     ) -> dict:
         """Completion that must return a JSON object. Tries the provider's
-        JSON mode first; falls back to plain completion + fence stripping.
-        Raises ValueError if the model output isn't parseable JSON — callers
-        should treat that as a failed run, not silently continue."""
+        JSON mode first (unless it already proved broken for this model);
+        falls back to plain completion + fence stripping. Raises ValueError
+        if the model output isn't parseable JSON — callers should treat that
+        as a failed run, not silently continue."""
         raw = ""
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max(max_tokens, self._MIN_COMPLETION_TOKENS),
-                temperature=temperature,
-                response_format={"type": "json_object"},
-                extra_body=self._EXTRA_BODY,
-            )
-            raw = resp.choices[0].message.content or ""
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("json mode raised (%s); falling back to plain", exc)
+        if LLMService._json_mode_usable:
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user},
+                    ],
+                    max_tokens=max(max_tokens, self._MIN_COMPLETION_TOKENS),
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                    extra_body=self._EXTRA_BODY,
+                )
+                raw = resp.choices[0].message.content or ""
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("json mode raised (%s); falling back to plain", exc)
+
+            if not raw.strip():
+                # Model accepts response_format but returns empty content
+                # (seen with deepseek). Don't pay for this call again.
+                logger.warning(
+                    "json mode unusable for %s; disabled for this process", self._model
+                )
+                LLMService._json_mode_usable = False
 
         if not raw.strip():
-            # Some models accept response_format but return empty content
-            # (reasoning consumed the budget, or json mode unsupported).
-            logger.warning("json mode returned empty; falling back to plain")
             raw = self.complete(
                 system + "\n\nRespond with the JSON object only — no prose, no fences.",
                 user,
