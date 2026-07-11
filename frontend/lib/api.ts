@@ -79,6 +79,76 @@ export const api = {
     }),
 
   // Mode 3 (Phase 3)
-  listMonitoredItems: () => request("/monitor/items"),
-  listAlerts: () => request("/monitor/alerts"),
+  listMonitoredItems: () => request<MonitoredItem[]>("/monitor/items"),
+  createMonitoredItem: (item: {
+    name: string;
+    category?: string;
+    subreddits: string[];
+    check_interval_hours?: number;
+  }) =>
+    request<MonitoredItem>("/monitor/items", {
+      method: "POST",
+      body: JSON.stringify(item),
+    }),
+  deleteMonitoredItem: (id: string) =>
+    request<{ deleted: string }>(`/monitor/items/${id}`, { method: "DELETE" }),
+  checkItemNow: (id: string) =>
+    request<{ run: MonitorRun | null; alert: MonitorAlert | null }>(
+      `/monitor/items/${id}/check`,
+      { method: "POST" }
+    ),
+  listAlerts: () => request<MonitorAlert[]>("/monitor/alerts"),
+  dismissAlert: (id: string) =>
+    request<{ dismissed: string }>(`/monitor/alerts/${id}/dismiss`, {
+      method: "POST",
+    }),
+  syncObsidian: () =>
+    request<{ suggestions: ObsidianSuggestion[] }>("/obsidian/sync", {
+      method: "POST",
+    }),
 };
+
+// ---- Mode 3 types (mirror backend rows) ----
+
+export interface RecentSignal {
+  signal_level: "none" | "low" | "medium" | "high";
+  ran_at: string;
+  posts_found: number;
+}
+
+export interface MonitoredItem {
+  id: string;
+  name: string;
+  category: string;
+  subreddits: string[];
+  check_interval_hours: number;
+  active: boolean;
+  last_checked_at: string | null;
+  created_at: string;
+  recent_signals?: RecentSignal[];
+}
+
+export interface MonitorRun {
+  id: string;
+  item_id: string;
+  ran_at: string;
+  posts_found: number;
+  sentiment: string;
+  signal_level: string;
+}
+
+export interface MonitorAlert {
+  id: string;
+  item_id: string;
+  severity: "none" | "low" | "medium" | "high";
+  summary: string;
+  thread_urls: string[];
+  actioned: boolean;
+  created_at: string;
+}
+
+export interface ObsidianSuggestion {
+  name: string;
+  category: string;
+  subreddits: string[];
+}

@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     obsidian_api_key: str = ""
     obsidian_verify_ssl: bool = False
 
+    # Owner (single-user mode until auth lands): UUID of the Supabase auth
+    # user that owns all monitored items/alerts. Create one in the dashboard
+    # (Authentication -> Users -> Add user) and paste its id here.
+    owner_user_id: str = ""
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

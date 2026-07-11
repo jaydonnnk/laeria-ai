@@ -333,6 +333,35 @@ class RedditService:
         )
         return unique
 
+    # ---- Phase 3: monitoring ----
+
+    def scan_recent(
+        self, subreddits: list[str], query: str, limit_per_sub: int = 10
+    ) -> list[RedditThread]:
+        """Recent mentions of a monitored item: past-week posts sorted newest
+        first, one search per subreddit. Search-page scores are unreliable but
+        fine here — the worker's LLM classifier judges content, and the alert
+        engine compares run-over-run counts, not absolute scores."""
+        found: list[RedditThread] = []
+        for sub in subreddits:
+            try:
+                resp = self._get(
+                    f"/r/{sub}/search/",
+                    params={
+                        "q": query,
+                        "restrict_sr": "on",
+                        "sort": "new",
+                        "t": "week",
+                        "limit": str(limit_per_sub),
+                    },
+                )
+            except httpx.HTTPStatusError as exc:
+                logger.warning("scan r/%s -> HTTP %s", sub, exc.response.status_code)
+                continue
+            found.extend(self._parse_search_page(resp.text, limit_per_sub, subreddit=sub))
+        seen: set[str] = set()
+        return [t for t in found if not (t.id in seen or seen.add(t.id))]
+
     def _search_all(self, query: str, limit: int = 10) -> list[RedditThread]:
         """Site-wide old.reddit search (no subreddit restriction)."""
         try:

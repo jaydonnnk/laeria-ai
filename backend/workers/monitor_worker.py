@@ -1,12 +1,16 @@
 """Monitor worker — long-running background job for Mode 3.
 
-Runs on the Hetzner VPS as a systemd service (see infra/systemd/).
-Polls each active monitored item on its cadence, evaluates signal via the
-alert engine, and persists alerts. Do NOT poll continuously — the 4-6h
-cadence keeps PRAW well within the free-tier rate limit.
+Deployment target is the Hetzner VPS as a systemd service (see
+infra/systemd/baryon-monitor.service); it also runs fine locally with
+`python -m workers.monitor_worker`.
 
-Phase 3 implements run_cycle(). This file currently just defines the loop
-skeleton so the systemd unit has a valid target.
+Wakes every POLL_SLEEP_SECONDS, checks only the items whose interval has
+elapsed. check_item() is the single-item pipeline and is also called
+synchronously by the API's run-now endpoint, so worker and dashboard share
+one code path:
+
+    scan recent posts (HTML search) -> classify run (LLM) -> persist run
+    -> alert engine (change vs baseline) -> persist alert
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import time
 
 from core.logging import configure_logging, get_logger
+from core.models import SignalLevel
 
 configure_logging()
 logger = get_logger(__name__)
@@ -21,18 +26,90 @@ logger = get_logger(__name__)
 POLL_SLEEP_SECONDS = 60 * 30  # wake every 30 min, act only on due items
 
 
+def check_item(item_row: dict, reddit=None, engine=None) -> dict:
+    """Run one monitoring check for one item. Returns a summary dict
+    {run, alert} — alert is None when nothing warrants attention."""
+    from agents.alert_engine import AlertEngine
+    from db import repositories as repo
+    from services.reddit import RedditService
+
+    reddit = reddit or RedditService()
+    engine = engine or AlertEngine()
+
+    item_id = item_row["id"]
+    name = item_row["name"]
+    subreddits = item_row.get("subreddits") or []
+    if not subreddits:
+        logger.warning("item %s (%s) has no subreddits; skipping", item_id, name)
+        repo.touch_item_checked(item_id)
+        return {"run": None, "alert": None}
+
+    # History BEFORE this run — the baseline the alert engine compares against.
+    history = repo.recent_runs(item_id, limit=10)
+
+    posts = reddit.scan_recent(subreddits, name)
+    findings = engine.classify_run(name, posts)
+    run_row = repo.create_run(
+        item_id=item_id,
+        posts_found=len(posts),
+        sentiment=findings["sentiment"],
+        signal_level=SignalLevel(findings["signal_level"]),
+        raw_findings=findings,
+    )
+    repo.touch_item_checked(item_id)
+
+    alert = engine.evaluate(item_id, run_row["id"], findings, history)
+    alert_row = None
+    if alert is not None:
+        alert_row = repo.create_alert(alert)
+        logger.info("ALERT [%s] %s: %s", alert.severity.value, name, alert.summary)
+        _notify(name, alert.severity.value, alert.summary)
+
+    logger.info(
+        "checked %s: %d posts, signal=%s%s",
+        name, len(posts), findings["signal_level"],
+        " -> ALERT" if alert_row else "",
+    )
+    return {"run": run_row, "alert": alert_row}
+
+
+def _notify(item_name: str, severity: str, summary: str) -> None:
+    """Alert side-channel. Best-effort Obsidian note; never fatal."""
+    try:
+        from services.obsidian import ObsidianService
+
+        ObsidianService().write_alert_note(
+            f"**{severity.upper()}** — {item_name}: {summary}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("obsidian notify skipped: %s", exc)
+
+
 def run_cycle() -> None:
-    """One pass over all active monitored items. Phase 3."""
-    raise NotImplementedError("Phase 3: monitor cycle")
+    """One pass over all due monitored items."""
+    from agents.alert_engine import AlertEngine
+    from db import repositories as repo
+    from services.reddit import RedditService
+
+    due = repo.items_due_for_check()
+    if not due:
+        logger.info("no items due")
+        return
+    logger.info("%d item(s) due for check", len(due))
+    reddit = RedditService()
+    engine = AlertEngine()
+    for row in due:
+        try:
+            check_item(row, reddit=reddit, engine=engine)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("check failed for %s: %s", row.get("name"), exc)
 
 
 def main() -> None:
-    logger.info("Monitor worker starting (skeleton — Phase 3 not yet implemented)")
+    logger.info("Monitor worker starting")
     while True:
         try:
             run_cycle()
-        except NotImplementedError:
-            logger.info("run_cycle not implemented yet; sleeping")
         except Exception as exc:  # noqa: BLE001
             logger.error("Monitor cycle error: %s", exc)
         time.sleep(POLL_SLEEP_SECONDS)
