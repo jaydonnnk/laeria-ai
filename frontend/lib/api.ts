@@ -35,6 +35,7 @@ export interface SignalQuality {
 
 export interface ResearchBrief {
   consensus_pick: string;
+  strengths: string[];
   failure_modes: string[];
   what_reviewers_miss: string[];
   alternatives: string[];

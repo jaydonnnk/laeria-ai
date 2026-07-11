@@ -54,6 +54,7 @@ excerpts provided by the user. Respond with JSON only, exactly this schema:
 
 {
   "consensus_pick": "the single option the community most consistently recommends, with one sentence of why. Empty string if no clear consensus.",
+  "strengths": ["what real users consistently praise or are glad about, per the threads"],
   "failure_modes": ["known problems/ways this goes wrong, per the threads"],
   "what_reviewers_miss": ["things these real users mention that review sites don't"],
   "alternatives": ["other options repeatedly mentioned, each with a phrase of context"],
@@ -65,6 +66,11 @@ excerpts provided by the user. Respond with JSON only, exactly this schema:
 Rules — these are integrity constraints, not suggestions:
 - Only claim what the provided threads actually support. Never invent products,
   prices, or opinions not present in the excerpts.
+- Report positive and negative signal at the SAME evidentiary standard. Reddit
+  engagement skews toward warnings and drama; satisfied users are quieter but
+  present in comments — extract their signal too. Do not manufacture negatives
+  to seem rigorous, and do not pad strengths to seem balanced: report what is
+  actually there, in proportion.
 - Weight by upvotes: a [200 pts] comment outweighs five [2 pts] comments.
 - Be suspicious of coordinated praise: same product named with unusual polish
   across unrelated threads, or praised only in low-score comments -> mention in
@@ -223,6 +229,7 @@ class ResearchAgent:
 
         return ResearchBrief(
             consensus_pick=raw.get("consensus_pick", ""),
+            strengths=raw.get("strengths", []),
             failure_modes=raw.get("failure_modes", []),
             what_reviewers_miss=raw.get("what_reviewers_miss", []),
             alternatives=raw.get("alternatives", []),

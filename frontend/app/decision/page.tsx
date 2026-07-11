@@ -109,6 +109,7 @@ function BriefCard({ brief }: { brief: ResearchBrief }) {
         </p>
       </div>
 
+      <ListSection title="What users praise" items={brief.strengths} accent="#1a7f37" />
       <ListSection title="Red flags" items={brief.red_flags} accent="#cf222e" />
       <ListSection title="Known failure modes" items={brief.failure_modes} />
       <ListSection title="What review sites miss" items={brief.what_reviewers_miss} />

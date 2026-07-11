@@ -88,6 +88,7 @@ class SignalQuality(BaseModel):
 
 class ResearchBrief(BaseModel):
     consensus_pick: str = ""
+    strengths: list[str] = Field(default_factory=list)
     failure_modes: list[str] = Field(default_factory=list)
     what_reviewers_miss: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
