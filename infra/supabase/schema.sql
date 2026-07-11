@@ -1,4 +1,4 @@
--- reddit-signal database schema (Phase 0.2)
+-- baryon.ai database schema (Phase 0.2)
 -- Apply in the Supabase SQL editor, or via `supabase db push`.
 -- Mirrors backend/core/models.py — keep the two in sync manually.
 

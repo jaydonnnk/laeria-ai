@@ -19,7 +19,7 @@ configure_logging()
 settings = get_settings()
 
 app = FastAPI(
-    title="reddit-signal",
+    title="baryon.ai",
     version="0.1.0",
     description="Reddit-as-human-signal research and monitoring.",
 )

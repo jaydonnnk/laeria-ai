@@ -1,5 +1,5 @@
 export const metadata = {
-  title: "reddit-signal",
+  title: "baryon.ai",
   description: "Reddit as human-truth signal for decisions.",
 };
 

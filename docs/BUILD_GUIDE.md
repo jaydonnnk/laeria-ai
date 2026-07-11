@@ -29,7 +29,7 @@ Persistent VPS worker + alert engine + Obsidian integration.
 - Implement `ObsidianService` (read vault → infer items; write alerts/logs).
 - Implement `AlertEngine.evaluate` (alert on change vs baseline, not absolute sentiment).
 - Implement `MonitorWorker.run_cycle`.
-- Deploy `infra/systemd/reddit-signal-monitor.service` on the VPS.
+- Deploy `infra/systemd/baryon-monitor.service` on the VPS.
 - Frontend: `/monitor` dashboard.
 - Poll every 4–6h per item. Never continuous.
 

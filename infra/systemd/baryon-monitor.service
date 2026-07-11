@@ -1,0 +1,25 @@
+[Unit]
+Description=baryon.ai monitor worker (Mode 3)
+After=network.target
+
+[Service]
+Type=simple
+# Edit User and paths for your VPS (hermes-donk).
+User=CHANGE_ME
+WorkingDirectory=/opt/baryon.ai/backend
+Environment=PYTHONPATH=/opt/baryon.ai/backend
+ExecStart=/opt/baryon.ai/backend/.venv/bin/python -m workers.monitor_worker
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+
+# Install:
+#   sudo cp baryon-monitor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now baryon-monitor
+# Logs:
+#   journalctl -u baryon-monitor -f

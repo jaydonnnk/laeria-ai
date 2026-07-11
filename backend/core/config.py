@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Reddit
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
-    reddit_user_agent: str = "reddit-signal/0.1"
+    reddit_user_agent: str = "baryon.ai/0.1"
     reddit_username: str = ""
     reddit_password: str = ""
 

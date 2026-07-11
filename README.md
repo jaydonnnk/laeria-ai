@@ -1,4 +1,4 @@
-# reddit-signal
+# baryon.ai
 
 An agentic research and monitoring tool that treats Reddit as a human-truth signal source across the full lifecycle of a decision.
 

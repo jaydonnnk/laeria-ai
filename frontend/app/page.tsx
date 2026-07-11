@@ -1,7 +1,7 @@
 export default function Home() {
   return (
     <main style={{ maxWidth: 640, margin: "80px auto", padding: "0 24px" }}>
-      <h1>reddit-signal</h1>
+      <h1>baryon.ai</h1>
       <p style={{ color: "#555" }}>
         Reddit as a human-truth signal across the lifecycle of a decision.
         This is the Phase 0.1 scaffold — feature pages are stubs.
