@@ -25,11 +25,16 @@ def get_supabase() -> Client:
 
 
 def healthcheck() -> bool:
-    """Confirm the client can reach the project. Used by test_environment."""
+    """Confirm the client can reach the project and the schema is applied.
+
+    Queries the `profiles` table (created by schema.sql). A valid connection +
+    key returns rows or an empty list; a bad key/URL or missing table raises.
+    Note: auth.get_session() is NOT used — it rejects the new sb_secret_ key
+    format and only reads local session state anyway.
+    """
     try:
         client = get_supabase()
-        # A trivial call that requires a valid connection + key.
-        client.auth.get_session()
+        client.table("profiles").select("id").limit(1).execute()
         return True
     except Exception as exc:  # noqa: BLE001
         logger.error("Supabase healthcheck failed: %s", exc)

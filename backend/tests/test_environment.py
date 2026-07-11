@@ -34,7 +34,7 @@ def main() -> int:
 
     # Hard requirements
     from services.reddit import RedditService
-    hard_results.append(check("Reddit (PRAW auth + fetch)", RedditService().healthcheck))
+    hard_results.append(check("Reddit (old.reddit HTML fetch)", RedditService().healthcheck))
 
     from services.llm import LLMService
     hard_results.append(check("OpenRouter (completion)", LLMService().healthcheck))

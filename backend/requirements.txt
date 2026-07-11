@@ -7,10 +7,15 @@ pydantic==2.11.7
 pydantic-settings==2.5.2
 
 # Database
-supabase==2.9.1
+# 2.31.0+: accepts Supabase's new sb_secret_/sb_publishable_ API key format.
+# 2.9.x rejected them at create_client (JWT-shape regex). Compatible w/ pydantic 2.11.7.
+supabase==2.31.0
 
-# Reddit
-praw==7.8.1
+# Reddit (no-auth: old.reddit HTML scraping — Reddit killed the free JSON API,
+# and script-app OAuth is now gated on a moderation use case we don't have.
+# Provider swap (Apify/etc.) planned for scale. See services/reddit.py.)
+beautifulsoup4==4.12.3
+lxml==5.3.0
 
 # LLM (OpenRouter is OpenAI-compatible)
 openai==1.54.0
