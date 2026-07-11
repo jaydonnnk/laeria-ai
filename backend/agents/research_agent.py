@@ -72,6 +72,48 @@ Rules — these are integrity constraints, not suggestions:
   confidence "low"."""
 
 
+_CLASSIFY_SYSTEM = """You classify Reddit post titles. The user is researching \
+a decision and needs posts that are RETROSPECTIVE OUTCOME REPORTS — someone \
+who already made this (or a closely similar) decision reporting how it went.
+
+Respond with JSON only: {"retrospective_ids": ["id1", "id2", ...]}
+
+Include a post id ONLY when the title indicates a first-person report AFTER
+the fact: updates ("[UPDATE]", "6 months later", "one year on"), verdicts
+("...and I regret it", "best decision I made", "my experience after..."),
+or clear outcome reflections.
+
+EXCLUDE:
+- Prospective questions ("Is X worth it?", "Should I do X?", "Thinking about X")
+- General advice/discussion threads not tied to the author's own outcome
+- Posts about a different decision than the one being researched
+- News, reviews by outlets, memes"""
+
+_OUTCOMES_SYSTEM = """You synthesise retrospective Reddit posts — real people \
+reporting how a decision actually turned out for them — into an honest \
+outcomes summary. Respond with JSON only, exactly this schema:
+
+{
+  "outcome_split": {"positive": 0.0, "negative": 0.0, "mixed": 0.0},
+  "common_positives": ["outcomes people report being glad about"],
+  "common_regrets": ["specific regrets people report"],
+  "surprising_findings": ["things that contradict conventional wisdom about this decision"],
+  "confidence": "high" | "moderate" | "low",
+  "sample_bias": "one or two sentences on who self-selects into posting updates and how that skews the picture"
+}
+
+Rules — integrity constraints:
+- outcome_split fractions must sum to ~1.0 and reflect ONLY the threads
+  provided. Count each thread author's own verdict; ignore commenters' votes.
+- Only report what post authors actually said. Never invent outcomes.
+- surprising_findings must be genuinely present in the threads, not
+  general knowledge.
+- Update posts skew dramatic (people post extremes, not mediocre outcomes) —
+  reflect that in sample_bias.
+- confidence: "high" needs many consistent reports; "low" when few threads,
+  contradictory outcomes, or the threads only loosely match the decision."""
+
+
 class ResearchAgent:
     def __init__(
         self, reddit: RedditService | None = None, llm: LLMService | None = None
@@ -178,13 +220,107 @@ class ResearchAgent:
 
     # ---- Mode 1 (Phase 2) ----
 
-    def mine_retrospectives(self, decision: str, context: str = "") -> OutcomeSummary:
+    THIN_COVERAGE_THRESHOLD = 5
+
+    def mine_retrospectives(
+        self, decision: str, context: str = "", thread_budget: int = 8
+    ) -> OutcomeSummary:
         """Find outcome/update posts from people who made this decision.
 
+        Pipeline: identify subs -> retrospective-template search -> batch
+        LLM title classification (keep only actual outcome reports) -> fetch
+        full threads -> outcomes synthesis.
+
         Falls back to a low-confidence result (thin_coverage=True) when fewer
-        than 5 retrospective posts are found. Never fabricates confidence.
+        than THIN_COVERAGE_THRESHOLD retrospective posts are found. Never
+        fabricates confidence.
         """
-        raise NotImplementedError("Phase 2: retrospective mining loop")
+        query = f"{decision} ({context})" if context else decision
+
+        # 1. Where to look + the community's phrasing of the topic.
+        plan = self._identify_subreddits(query)
+        subreddits = plan["subreddits"][:_MAX_SUBREDDITS]
+        topic = plan["search_query"]
+        logger.info("retrospective plan: subs=%s topic=%r", subreddits, topic)
+
+        # 2. Template search for outcome-shaped posts.
+        candidates = self._reddit.search_retrospective(topic, subreddits)
+        if not candidates:
+            return _empty_outcomes("No candidate posts found for this decision.")
+
+        # 3. Classify titles in one batched LLM call; keep retrospectives.
+        retro_ids = self._classify_retrospectives(decision, candidates)
+        retro_candidates = [t for t in candidates if t.id in retro_ids]
+        logger.info(
+            "classifier kept %d/%d as retrospective", len(retro_candidates), len(candidates)
+        )
+
+        thin = len(retro_candidates) < self.THIN_COVERAGE_THRESHOLD
+        if not retro_candidates:
+            return _empty_outcomes(
+                "Candidates found, but none were actual outcome reports "
+                "(all prospective questions or irrelevant)."
+            )
+
+        # 4. Read the strongest retrospectives in full.
+        chosen = sorted(
+            retro_candidates, key=lambda t: (t.score, t.num_comments), reverse=True
+        )[:thread_budget]
+        full_threads: list[RedditThread] = []
+        for t in chosen:
+            try:
+                full_threads.append(self._reddit.get_thread_with_comments(t.id))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("thread %s fetch failed: %s", t.id, exc)
+        if not full_threads:
+            return _empty_outcomes("Retrospective posts found but none could be fetched.")
+
+        # 5. Synthesise outcomes.
+        summary = self._synthesise_outcomes(decision, full_threads, len(retro_candidates))
+        summary.thin_coverage = thin
+        if thin:
+            summary.confidence = ConfidenceLevel.LOW
+        return summary
+
+    def _classify_retrospectives(
+        self, decision: str, candidates: list[RedditThread]
+    ) -> set[str]:
+        """One batched LLM call: which candidate titles are genuine
+        retrospective outcome reports (not prospective questions)?"""
+        lines = "\n".join(
+            f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in candidates[:60]
+        )
+        raw = self._llm.complete_json(
+            _CLASSIFY_SYSTEM,
+            f"Decision being researched: {decision}\n\nCandidate posts:\n{lines}",
+            max_tokens=1500,
+        )
+        ids = raw.get("retrospective_ids", [])
+        return {str(i) for i in ids if isinstance(i, (str, int))}
+
+    def _synthesise_outcomes(
+        self, decision: str, threads: list[RedditThread], retro_count: int
+    ) -> OutcomeSummary:
+        corpus = _build_corpus(threads)
+        raw = self._llm.complete_json(
+            _OUTCOMES_SYSTEM,
+            f"Decision: {decision}\n\nRetrospective threads (from people who "
+            f"made this decision; {retro_count} identified in total, "
+            f"{len(threads)} read in full):\n\n{corpus}",
+            max_tokens=2500,
+        )
+        pct = raw.get("outcome_split", {})
+        return OutcomeSummary(
+            retrospective_count=retro_count,
+            pct_positive=float(pct.get("positive", 0.0)),
+            pct_negative=float(pct.get("negative", 0.0)),
+            pct_mixed=float(pct.get("mixed", 0.0)),
+            common_positives=raw.get("common_positives", []),
+            common_regrets=raw.get("common_regrets", []),
+            surprising_findings=raw.get("surprising_findings", []),
+            sample_bias=raw.get("sample_bias", ""),
+            confidence=_safe_confidence(raw.get("confidence")),
+        )
 
 
 # ---- module helpers ----
@@ -249,4 +385,13 @@ def _empty_brief(subreddits: list[str], note: str) -> ResearchBrief:
         signal_quality=SignalQuality(
             subreddits_checked=subreddits, thread_count=0, bias_notes=note
         ),
+    )
+
+
+def _empty_outcomes(note: str) -> OutcomeSummary:
+    return OutcomeSummary(
+        retrospective_count=0,
+        confidence=ConfidenceLevel.LOW,
+        thin_coverage=True,
+        sample_bias=note,
     )

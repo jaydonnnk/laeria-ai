@@ -265,10 +265,93 @@ class RedditService:
 
     # ---- Phase 2 ----
 
+    # Phrasings people actually use in retrospective/outcome post titles.
+    # Kept short: each template × subreddit is one paced HTTP request.
+    RETROSPECTIVE_TEMPLATES = (
+        "{topic} update",
+        "{topic} months later",
+        "{topic} regret",
+        "{topic} worth it",
+    )
+
     def search_retrospective(
-        self, topic: str, subreddits: list[str]
+        self, topic: str, subreddits: list[str], per_search_limit: int = 10
     ) -> list[RedditThread]:
-        raise NotImplementedError("Phase 2: retrospective/update post search")
+        """Hunt update/outcome posts about a decision across subreddits.
+
+        Runs each retrospective query template against each subreddit, plus a
+        site-wide pass of the strongest template, then dedupes. Results are
+        CANDIDATES — titles matching retrospective phrasing — and still need
+        LLM classification (a title like "X worth it?" is usually a
+        prospective question, not an outcome report).
+        """
+        candidates: list[RedditThread] = []
+        for sub in subreddits:
+            for template in self.RETROSPECTIVE_TEMPLATES:
+                candidates.extend(
+                    self.search_subreddit(
+                        sub,
+                        template.format(topic=topic),
+                        time_filter="all",
+                        limit=per_search_limit,
+                    )
+                )
+        # Site-wide pass: update posts often live outside the obvious subs
+        # (r/self, r/TrueOffMyChest, niche subs the LLM didn't name).
+        candidates.extend(
+            self._search_all(f"{topic} update", limit=per_search_limit)
+        )
+
+        seen: set[str] = set()
+        unique = [t for t in candidates if not (t.id in seen or seen.add(t.id))]
+        logger.info(
+            "retrospective search %r: %d candidates (%d unique)",
+            topic, len(candidates), len(unique),
+        )
+        return unique
+
+    def _search_all(self, query: str, limit: int = 10) -> list[RedditThread]:
+        """Site-wide old.reddit search (no subreddit restriction)."""
+        try:
+            resp = self._get(
+                "/search/",
+                params={"q": query, "sort": "relevance", "t": "all", "limit": str(limit)},
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.warning("site-wide search -> HTTP %s", exc.response.status_code)
+            return []
+
+        soup = BeautifulSoup(resp.text, "lxml")
+        threads: list[RedditThread] = []
+        for el in soup.select("div.search-result-link")[:limit]:
+            fullname = el.attrs.get("data-fullname", "")
+            if not fullname.startswith("t3_"):
+                continue
+            title_a = el.select_one("a.search-title")
+            sub_a = el.select_one("a.search-subreddit-link")
+            sub = sub_a.get_text(strip=True).removeprefix("r/") if sub_a else ""
+            time_el = el.select_one("time")
+            threads.append(
+                RedditThread(
+                    id=fullname.removeprefix("t3_"),
+                    subreddit=sub,
+                    title=title_a.get_text(strip=True) if title_a else "",
+                    url=(title_a.attrs.get("href", "") if title_a else ""),
+                    score=self._parse_points(
+                        el.select_one(".search-score").get_text()
+                        if el.select_one(".search-score")
+                        else None
+                    ),
+                    num_comments=self._parse_count(
+                        el.select_one("a.search-comments").get_text()
+                        if el.select_one("a.search-comments")
+                        else None
+                    ),
+                    created_utc=_iso_to_utc(time_el.attrs.get("datetime")) if time_el else 0.0,
+                    author_account_age_days=None,
+                )
+            )
+        return threads
 
 
 def _iso_to_utc(iso: str | None) -> float:

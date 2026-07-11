@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from agents.research_agent import ResearchAgent
 from core.logging import get_logger
-from core.models import ResearchBrief
+from core.models import OutcomeSummary, ResearchBrief
 
 logger = get_logger(__name__)
 
@@ -26,8 +26,9 @@ class DecisionRequest(BaseModel):
 
 
 class RetrospectiveRequest(BaseModel):
-    decision: str
+    decision: str = Field(min_length=3, max_length=500)
     context: str = ""
+    thread_budget: int = Field(default=8, ge=2, le=20)
 
 
 @router.post("/decision")
@@ -42,6 +43,12 @@ def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
 
 
 @router.post("/retrospective")
-def start_retrospective(req: RetrospectiveRequest) -> dict:
-    """Mode 1 — outcome/update-post mining."""
-    raise HTTPException(status_code=501, detail="Phase 2: not implemented")
+def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
+    """Mode 1 — outcome/update-post mining. Synchronous (2-4 minutes)."""
+    try:
+        return ResearchAgent().mine_retrospectives(
+            req.decision, req.context, thread_budget=req.thread_budget
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("retrospective mining failed")
+        raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc

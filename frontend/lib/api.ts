@@ -33,6 +33,20 @@ export interface ResearchBrief {
   signal_quality: SignalQuality;
 }
 
+// Mirrors backend core/models.py OutcomeSummary.
+export interface OutcomeSummary {
+  retrospective_count: number;
+  pct_positive: number;
+  pct_negative: number;
+  pct_mixed: number;
+  common_positives: string[];
+  common_regrets: string[];
+  surprising_findings: string[];
+  sample_bias: string;
+  confidence: "high" | "moderate" | "low";
+  thin_coverage: boolean;
+}
+
 export const api = {
   health: () => request<{ status: string }>("/health"),
 
@@ -44,10 +58,10 @@ export const api = {
     }),
 
   // Mode 1 (Phase 2)
-  startRetrospective: (decision: string, context = "") =>
-    request("/research/retrospective", {
+  startRetrospective: (decision: string, context = "", thread_budget = 8) =>
+    request<OutcomeSummary>("/research/retrospective", {
       method: "POST",
-      body: JSON.stringify({ decision, context }),
+      body: JSON.stringify({ decision, context, thread_budget }),
     }),
 
   // Mode 3 (Phase 3)

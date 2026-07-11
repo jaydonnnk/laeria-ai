@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "C:\\Users\\jayd0\\OneDrive\\Desktop\\baryon.ai\\backend\\.venv\\Scripts\\python.exe",
+      "runtimeArgs": ["-m", "uvicorn", "api.main:app", "--host", "127.0.0.1", "--port", "8000"],
+      "cwd": "C:\\Users\\jayd0\\OneDrive\\Desktop\\baryon.ai\\backend",
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "C:\\Users\\jayd0\\OneDrive\\Desktop\\baryon.ai\\frontend",
+      "port": 3000
+    }
+  ]
+}
