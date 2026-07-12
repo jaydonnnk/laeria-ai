@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     reddit_user_agent: str = "baryon.ai/0.1"
     reddit_username: str = ""
     reddit_password: str = ""
+    # Optional egress proxy for Reddit requests. Datacenter IPs (Hetzner etc.)
+    # are 403-blocked by Reddit; a residential/rotating proxy makes VPS-hosted
+    # scraping work. Empty = direct connection (fine on a residential IP).
+    # Format: "http://user:pass@host:port" or "socks5://host:port".
+    reddit_proxy: str = ""
 
     # Obsidian
     obsidian_api_url: str = "https://127.0.0.1:27124"

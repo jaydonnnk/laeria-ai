@@ -42,3 +42,6 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 local_data/
+
+# worker runtime log (laptop)
+backend/worker.log

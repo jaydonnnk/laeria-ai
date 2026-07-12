@@ -73,11 +73,17 @@ class RedditService:
         # reddit_user_agent kept in config for a future provider; HTML scraping
         # needs a browser UA, so we don't use the bot-style one here.
         self._settings = settings
+        # Route through a proxy when configured (needed on datacenter IPs that
+        # Reddit blocks; unnecessary on a residential connection).
+        proxy = settings.reddit_proxy or None
+        if proxy:
+            logger.info("Reddit requests routed through configured proxy")
         self._client = httpx.Client(
             base_url=_BASE,
             headers={"User-Agent": _BROWSER_UA},
             timeout=15.0,
             follow_redirects=True,
+            proxy=proxy,
         )
         self._last_request_at = 0.0
 
