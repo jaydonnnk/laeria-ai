@@ -106,7 +106,50 @@ export const api = {
     request<{ suggestions: ObsidianSuggestion[] }>("/obsidian/sync", {
       method: "POST",
     }),
+
+  // Phase 4: actions + mandate
+  getMandate: () => request<Mandate>("/actions/mandate"),
+  putMandate: (m: Mandate) =>
+    request<Mandate>("/actions/mandate", { method: "PUT", body: JSON.stringify(m) }),
+  listPayActions: () => request<PayAction[]>("/actions/"),
+  proposeAction: (p: {
+    type: string;
+    target_url: string;
+    category?: string;
+    description?: string;
+  }) =>
+    request<{ action: PayAction; outcome: string }>("/actions/propose", {
+      method: "POST",
+      body: JSON.stringify(p),
+    }),
+  approveAction: (id: string) =>
+    request<{ action: PayAction; outcome: string }>(`/actions/${id}/approve`, {
+      method: "POST",
+    }),
+  rejectAction: (id: string) =>
+    request<{ action: PayAction; outcome: string }>(`/actions/${id}/reject`, {
+      method: "POST",
+    }),
 };
+
+export interface Mandate {
+  max_per_transaction: number;
+  max_per_month: number;
+  require_confirmation_above: number;
+  allowed_categories: string[];
+  blocked_vendors: string[];
+  autonomous_actions_enabled: boolean;
+}
+
+export interface PayAction {
+  id: string;
+  type: string;
+  target: string;
+  status: "pending_approval" | "approved" | "executed" | "cancelled" | "failed";
+  amount_usd: number;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
 
 // ---- Mode 3 types (mirror backend rows) ----
 

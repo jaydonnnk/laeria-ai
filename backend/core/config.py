@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     # (Authentication -> Users -> Add user) and paste its id here.
     owner_user_id: str = ""
 
+    # x402 — real protocol on Base Sepolia testnet (free faucet USDC).
+    # Flip network to "eip155:8453" (Base mainnet) + fund the agent wallet
+    # with real USDC for production. Same code either way.
+    x402_network: str = "eip155:84532"
+    x402_facilitator_url: str = "https://x402.org/facilitator"
+    x402_agent_private_key: str = ""
+    x402_agent_address: str = ""
+    x402_treasury_address: str = ""
+    x402_treasury_private_key: str = ""
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

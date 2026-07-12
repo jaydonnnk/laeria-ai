@@ -194,3 +194,108 @@ def mark_alert_actioned(alert_id: str) -> None:
         .eq("id", alert_id)
         .execute()
     )
+
+
+# ---- mandate (profiles.mandate jsonb) ----
+
+def get_mandate() -> dict:
+    """The owner's standing spend rules. Empty dict = nothing authorised."""
+    res = (
+        get_supabase()
+        .table("profiles")
+        .select("mandate")
+        .eq("id", _owner())
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        # Profile row not created yet — treat as no mandate.
+        return {}
+    return res.data[0].get("mandate") or {}
+
+
+def set_mandate(mandate: dict) -> dict:
+    res = (
+        get_supabase()
+        .table("profiles")
+        .upsert({"id": _owner(), "mandate": mandate})
+        .execute()
+    )
+    return res.data[0].get("mandate") or {}
+
+
+# ---- actions ----
+
+def create_action(
+    type_: str,
+    target: str,
+    status: str,
+    amount_usd: float,
+    metadata: dict[str, Any],
+) -> dict:
+    row = {
+        "user_id": _owner(),
+        "type": type_,
+        "target": target,
+        "status": status,
+        "amount_usd": amount_usd,
+        "metadata": metadata,
+    }
+    res = get_supabase().table("actions").insert(row).execute()
+    return res.data[0]
+
+
+def get_action(action_id: str) -> dict | None:
+    res = (
+        get_supabase()
+        .table("actions")
+        .select("*")
+        .eq("user_id", _owner())
+        .eq("id", action_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def list_actions(limit: int = 50) -> list[dict]:
+    return (
+        get_supabase()
+        .table("actions")
+        .select("*")
+        .eq("user_id", _owner())
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    )
+
+
+def update_action(action_id: str, fields: dict[str, Any]) -> dict | None:
+    res = (
+        get_supabase()
+        .table("actions")
+        .update(fields)
+        .eq("user_id", _owner())
+        .eq("id", action_id)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def executed_spend_this_month() -> float:
+    """Sum of executed action amounts since the 1st of the current month —
+    the number the mandate's monthly cap is enforced against."""
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    rows = (
+        get_supabase()
+        .table("actions")
+        .select("amount_usd")
+        .eq("user_id", _owner())
+        .eq("status", "executed")
+        .gte("created_at", month_start.isoformat())
+        .execute()
+        .data
+    )
+    return float(sum(float(r["amount_usd"]) for r in rows))

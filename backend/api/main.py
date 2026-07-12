@@ -11,7 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import actions, monitor, obsidian, research
+from api.routes import actions, monitor, obsidian, research, vendor
 from core.config import get_settings
 from core.logging import configure_logging
 
@@ -36,6 +36,7 @@ app.include_router(research.router)
 app.include_router(monitor.router)
 app.include_router(obsidian.router)
 app.include_router(actions.router)
+app.include_router(vendor.router)
 
 
 @app.get("/health")
