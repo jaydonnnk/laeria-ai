@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     x402_treasury_private_key: str = ""
 
     # App
+    cors_origins: str = ""  # comma-separated; empty = allow all (dev)
     app_env: str = "development"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

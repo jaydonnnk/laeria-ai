@@ -3,15 +3,18 @@
 Run locally:
     uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
-Routes are wired but return 501 until their phase implements them.
+Auth: every feature router requires a Supabase Auth bearer token belonging to
+the owner (see core/auth.py). /health and /vendor/* stay open — the vendor
+endpoints are x402 paid resources whose payment IS their access control.
 """
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import actions, monitor, obsidian, research, vendor
+from core.auth import require_owner
 from core.config import get_settings
 from core.logging import configure_logging
 
@@ -24,19 +27,22 @@ app = FastAPI(
     description="Reddit-as-human-signal research and monitoring.",
 )
 
+# Bearer-token auth (not cookies), so a wildcard origin is acceptable in dev;
+# set CORS_ORIGINS to the Vercel domain in production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in Phase 5
-    allow_credentials=True,
+    allow_origins=settings.cors_origins.split(",") if settings.cors_origins else ["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(research.router)
-app.include_router(monitor.router)
-app.include_router(obsidian.router)
-app.include_router(actions.router)
-app.include_router(vendor.router)
+_authed = [Depends(require_owner)]
+app.include_router(research.router, dependencies=_authed)
+app.include_router(monitor.router, dependencies=_authed)
+app.include_router(obsidian.router, dependencies=_authed)
+app.include_router(actions.router, dependencies=_authed)
+app.include_router(vendor.router)  # x402: payment is the auth
 
 
 @app.get("/health")

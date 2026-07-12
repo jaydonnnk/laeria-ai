@@ -1,13 +1,29 @@
-// Thin client for the FastAPI backend.
-// Every feature call currently hits a 501 endpoint until its phase lands.
+// Thin client for the FastAPI backend. Attaches the Supabase Auth session
+// token; a 401/403 response bounces the user to /login.
+
+import { supabase } from "./supabase";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token && typeof window !== "undefined") {
+    window.location.href = "/login";
+    throw new Error("not signed in");
+  }
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(options?.headers ?? {}),
+    },
   });
+  if (res.status === 401 || res.status === 403) {
+    if (typeof window !== "undefined") window.location.href = "/login";
+    throw new Error("session expired — sign in again");
+  }
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`${res.status}: ${detail}`);
