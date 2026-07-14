@@ -42,6 +42,39 @@ def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
         raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
 
 
+class ActOnBriefRequest(BaseModel):
+    """Mode 2 trigger: execute a purchase off a research brief."""
+    query: str = Field(min_length=3, max_length=500)
+    consensus_pick: str = Field(min_length=3, max_length=600)
+    confidence: str = Field(pattern="^(high|moderate|low)$")
+
+
+@router.post("/act")
+def act_on_brief(req: ActOnBriefRequest) -> dict:
+    """The plan's core promise: consensus strong -> agent buys. Server-side
+    integrity gate — refuses to act on weak research regardless of what the
+    UI sends. The purchase itself goes through the same mandate/approval
+    pipeline as any other action."""
+    if req.confidence == "low":
+        raise HTTPException(
+            status_code=409,
+            detail="refusing to act on low-confidence research — the whole "
+            "point is not spending money on weak signal",
+        )
+
+    from api.routes.actions import ProposeRequest, propose_action
+    from core.config import get_settings
+
+    return propose_action(
+        ProposeRequest(
+            type="purchase",
+            target_url=get_settings().action_vendor_url,
+            category="research",
+            description=f"[Mode 2] {req.consensus_pick[:200]} (query: {req.query[:120]})",
+        )
+    )
+
+
 @router.post("/retrospective")
 def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
     """Mode 1 — outcome/update-post mining. Synchronous (2-4 minutes)."""

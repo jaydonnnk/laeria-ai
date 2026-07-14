@@ -68,6 +68,38 @@ def _execute(action_id: str, target_url: str) -> dict:
     )
 
 
+def _execute_cancellation(action: dict) -> dict:
+    """'Execute' a subscription cancellation. No consumer service exposes a
+    cancel API, so the honest execution is: log the decision, write a
+    reminder into the Obsidian vault (best-effort), and record that the final
+    click is manual. Never pretends an API call happened."""
+    from db import repositories as repo
+
+    item = action["target"]
+    note = f"CANCEL {item} — approved by owner; complete the cancellation in the service's account settings."
+    vault_written = False
+    try:
+        from services.obsidian import ObsidianService
+
+        ObsidianService().write_action_log(note)
+        vault_written = True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("obsidian action log skipped: %s", exc)
+
+    return repo.update_action(
+        action["id"],
+        {
+            "status": "executed",
+            "metadata": {
+                **(action.get("metadata") or {}),
+                "execution": "manual-cancel",
+                "note": note,
+                "obsidian_reminder_written": vault_written,
+            },
+        },
+    )
+
+
 @router.get("/mandate")
 def get_mandate() -> dict:
     from db import repositories as repo
@@ -152,6 +184,14 @@ def approve_action(action_id: str) -> dict:
         repo.update_action(action_id, {"status": "cancelled",
                                        "metadata": {**action["metadata"], "expired": True}})
         raise HTTPException(status_code=410, detail="approval window expired")
+
+    if action["type"] == "cancel_subscription":
+        executed = _execute_cancellation(action)
+        return {
+            "action": executed,
+            "outcome": "approved — cancellation logged; finish it in the "
+            "service's account settings (no cancel API exists)",
+        }
 
     executed = _execute(action_id, action["target"])
     return {"action": executed, "outcome": "approved and executed"}

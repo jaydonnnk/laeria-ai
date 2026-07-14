@@ -87,6 +87,13 @@ export const api = {
       body: JSON.stringify({ query, context, thread_budget }),
     }),
 
+  // Mode 2 trigger: act on a strong brief
+  actOnBrief: (p: { query: string; consensus_pick: string; confidence: string }) =>
+    request<{ action: PayAction; outcome: string }>("/research/act", {
+      method: "POST",
+      body: JSON.stringify(p),
+    }),
+
   // Mode 1 (Phase 2)
   startRetrospective: (decision: string, context = "", thread_budget = 8) =>
     request<OutcomeSummary>("/research/retrospective", {
@@ -202,6 +209,7 @@ export interface MonitorAlert {
   severity: "none" | "low" | "medium" | "high";
   summary: string;
   thread_urls: string[];
+  recommended_action: string;
   actioned: boolean;
   created_at: string;
 }

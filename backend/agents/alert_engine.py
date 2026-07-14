@@ -34,7 +34,8 @@ only:
   "signal_level": "none" | "low" | "medium" | "high",
   "summary": "one or two sentences: what is being said about this item right now",
   "notable_thread_ids": ["ids of posts that carry the signal"],
-  "issue_tag": "short-kebab-case tag for the dominant issue, or empty string"
+  "issue_tag": "short-kebab-case tag for the dominant issue, or empty string",
+  "recommended_action": "none" | "cancel_subscription" | "order_replacement"
 }
 
 signal_level meaning (calibrate strictly):
@@ -50,7 +51,12 @@ Rules:
   every product — that is "none" or "low", not "medium".
 - issue_tag names the pattern ("app-update-broken", "price-increase") so
   runs can be compared; keep it stable and generic.
-- Posts marked [score hidden] are recent; judge by content."""
+- Posts marked [score hidden] are recent; judge by content.
+- recommended_action: "cancel_subscription" only for a SERVICE the user pays
+  recurring money for AND the signal is medium/high (shutdown, sustained
+  quality collapse, price hike). "order_replacement" only for a PHYSICAL
+  product with a defect/recall pattern at medium/high. Otherwise "none".
+  This is a recommendation the user must approve — still be conservative."""
 
 _LEVEL_ORDER = {
     SignalLevel.NONE: 0,
@@ -94,12 +100,16 @@ class AlertEngine:
         level = str(raw.get("signal_level", "none")).lower()
         if level not in ("none", "low", "medium", "high"):
             level = "none"
+        rec = str(raw.get("recommended_action", "none")).lower()
+        if rec not in ("none", "cancel_subscription", "order_replacement"):
+            rec = "none"
         return {
             "sentiment": str(raw.get("sentiment", "neutral")).lower(),
             "signal_level": level,
             "summary": raw.get("summary", ""),
             "notable_urls": notable_urls,
             "issue_tag": raw.get("issue_tag", "") or "",
+            "recommended_action": rec,
         }
 
     # ---- stage 2: change vs baseline ----
@@ -151,11 +161,16 @@ class AlertEngine:
         if severity == SignalLevel.HIGH and level == SignalLevel.MEDIUM:
             summary = f"Persisting across checks: {summary}"
 
+        try:
+            recommended = ActionType(findings.get("recommended_action", "none"))
+        except ValueError:
+            recommended = ActionType.NONE
+
         return MonitorAlert(
             item_id=item_id,
             run_id=run_id,
             severity=severity,
             summary=summary,
             thread_urls=findings.get("notable_urls", []),
-            recommended_action=ActionType.NONE,  # Phase 4 wires mandates
+            recommended_action=recommended,
         )

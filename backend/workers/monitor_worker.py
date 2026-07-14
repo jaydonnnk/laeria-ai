@@ -64,6 +64,7 @@ def check_item(item_row: dict, reddit=None, engine=None) -> dict:
         alert_row = repo.create_alert(alert)
         logger.info("ALERT [%s] %s: %s", alert.severity.value, name, alert.summary)
         _notify(name, alert.severity.value, alert.summary)
+        _propose_alert_action(alert, alert_row, name)
 
     logger.info(
         "checked %s: %d posts, signal=%s%s",
@@ -71,6 +72,46 @@ def check_item(item_row: dict, reddit=None, engine=None) -> dict:
         " -> ALERT" if alert_row else "",
     )
     return {"run": run_row, "alert": alert_row}
+
+
+def _propose_alert_action(alert, alert_row: dict, item_name: str) -> None:
+    """Mode 3 trigger: an alert carrying a recommended action becomes a
+    PENDING action for the user to approve (24h window). Monitoring never
+    executes autonomously — the human approves, then the action agent runs.
+    Best-effort: an action-proposal failure must not kill the check."""
+    from datetime import datetime, timedelta, timezone
+
+    from core.config import get_settings
+    from core.models import ActionType
+    from db import repositories as repo
+
+    if alert.recommended_action == ActionType.NONE:
+        return
+    try:
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        # Replacements are payable (x402 vendor); cancellations have no API —
+        # approval executes the manual-cancel flow (Obsidian note + log).
+        target = (
+            get_settings().action_vendor_url
+            if alert.recommended_action == ActionType.ORDER_REPLACEMENT
+            else item_name
+        )
+        repo.create_action(
+            alert.recommended_action.value,
+            target,
+            "pending_approval",
+            0.0,
+            {
+                "description": f"[monitor] {item_name}: {alert.summary[:160]}",
+                "reason": f"recommended by alert ({alert.severity.value})",
+                "alert_id": alert_row.get("id"),
+                "expires_at": expires_at,
+            },
+        )
+        logger.info("proposed %s action for %s (pending approval)",
+                    alert.recommended_action.value, item_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("could not propose action for alert: %s", exc)
 
 
 def _notify(item_name: str, severity: str, summary: str) -> None:

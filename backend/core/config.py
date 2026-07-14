@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
 
+    # Where agent-initiated purchases/replacements are executed. Points at our
+    # own x402 vendor until real x402 merchants exist — swap when they do.
+    action_vendor_url: str = "http://127.0.0.1:8000/vendor/deep-report"
+
     # App
     cors_origins: str = ""  # comma-separated; empty = allow all (dev)
     app_env: str = "development"

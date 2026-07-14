@@ -127,7 +127,18 @@ class ObsidianService:
         resp.raise_for_status()
 
     def write_action_log(self, action_summary: str) -> None:
-        raise NotImplementedError("Phase 4: append to action log note")
+        """Append an entry to 'baryon actions.md' in the vault root."""
+        from datetime import datetime, timezone
+
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        resp = httpx.post(
+            f"{self._base_url}/vault/baryon actions.md",
+            headers={**self._headers, "Content-Type": "text/markdown"},
+            content=f"\n- {stamp} — {action_summary}\n",
+            verify=self._verify,
+            timeout=10.0,
+        )
+        resp.raise_for_status()
 
 
 _EXTRACT_SYSTEM = """You read a user's personal notes and identify products, \

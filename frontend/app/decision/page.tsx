@@ -16,6 +16,26 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState<ResearchBrief | null>(null);
+  const [actOutcome, setActOutcome] = useState<string | null>(null);
+  const [acting, setActing] = useState(false);
+
+  async function executePurchase() {
+    if (!brief || acting) return;
+    setActing(true);
+    setActOutcome(null);
+    try {
+      const res = await api.actOnBrief({
+        query,
+        consensus_pick: brief.consensus_pick,
+        confidence: brief.confidence,
+      });
+      setActOutcome(res.outcome);
+    } catch (err) {
+      setActOutcome(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActing(false);
+    }
+  }
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
@@ -77,6 +97,30 @@ export default function Page() {
       )}
 
       {brief && <BriefCard brief={brief} />}
+
+      {brief && brief.consensus_pick && brief.confidence !== "low" && (
+        <div
+          style={{
+            marginTop: 20,
+            border: "1px solid #1a7f37",
+            borderRadius: 10,
+            padding: "16px 20px",
+            background: "#f0fff4",
+          }}
+        >
+          <h3 style={{ marginTop: 0 }}>Consensus is strong — let the agent act</h3>
+          <p style={{ color: "#555", fontSize: 14 }}>
+            Proposes a purchase through the x402 rail under your mandate.
+            (Targets the demo vendor until real x402 merchants exist.)
+          </p>
+          <button onClick={executePurchase} disabled={acting} style={buttonStyle}>
+            {acting ? "Proposing…" : "Execute purchase via agent"}
+          </button>
+          {actOutcome && (
+            <p style={{ marginBottom: 0, fontSize: 14, color: "#1a7f37" }}>{actOutcome}</p>
+          )}
+        </div>
+      )}
     </main>
   );
 }

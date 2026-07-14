@@ -122,6 +122,15 @@ export default function Page() {
                   </button>
                 </div>
                 <p style={{ margin: "6px 0" }}>{a.summary}</p>
+                {a.recommended_action && a.recommended_action !== "none" && (
+                  <p style={{ margin: "0 0 6px", fontSize: 13, color: "#9a6700" }}>
+                    Agent recommends: <strong>{a.recommended_action.replace("_", " ")}</strong>
+                    {" — "}
+                    <a href="/actions" style={{ color: "#0969da" }}>
+                      review in Actions
+                    </a>
+                  </p>
+                )}
                 {a.thread_urls.length > 0 && (
                   <p style={{ margin: 0, fontSize: 13 }}>
                     {a.thread_urls.map((u, i) => (
