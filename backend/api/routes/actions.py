@@ -210,6 +210,19 @@ def reject_action(action_id: str) -> dict:
     return {"action": updated, "outcome": "rejected"}
 
 
+@router.get("/bazaar")
+def bazaar_search(q: str = "", limit: int = 30) -> list[dict]:
+    """Discover real x402-enabled services from the public Bazaar index.
+    Free, unauthenticated upstream. Paying a discovered service goes through
+    the normal propose flow (mandate rules apply to real money)."""
+    from services.bazaar import list_services
+
+    try:
+        return list_services(limit=limit, query=q)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"bazaar unreachable: {exc}") from exc
+
+
 @router.get("/")
 def list_actions() -> list[dict]:
     from db import repositories as repo

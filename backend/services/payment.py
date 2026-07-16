@@ -98,8 +98,12 @@ class PaymentService:
             raise RuntimeError("X402_AGENT_PRIVATE_KEY not configured in .env")
         account = Account.from_key(key)
         client = x402ClientSync()
+        # Register both the configured network and Base mainnet: Bazaar
+        # services are mainnet, our demo vendor is testnet. Same wallet signs
+        # for both; whether a payment succeeds depends on funding that network.
+        networks = {self._settings.x402_network, "eip155:8453"}
         register_exact_evm_client(
-            client, EthAccountSigner(account), networks=self._settings.x402_network
+            client, EthAccountSigner(account), networks=sorted(networks)
         )
         return client
 
@@ -158,6 +162,22 @@ class PaymentService:
                 X_PAYMENT_HEADER: header_value,
             },
         )
+        if paid.status_code == 402:
+            # Vendor rejected the payment — surface its stated reason
+            # (typically insufficient on-chain balance for the network).
+            reason = ""
+            try:
+                body = paid.json()
+                reason = str(
+                    body.get("error") or body.get("detail") or body
+                )[:200]
+            except Exception:  # noqa: BLE001
+                reason = paid.text[:200]
+            raise RuntimeError(
+                f"payment rejected by vendor: {reason} "
+                f"(network {req.network if req else '?'} — is the agent "
+                "wallet funded there?)"
+            )
         paid.raise_for_status()
         receipt = (
             paid.headers.get(PAYMENT_RESPONSE_HEADER)

@@ -153,7 +153,21 @@ export const api = {
     request<{ action: PayAction; outcome: string }>(`/actions/${id}/reject`, {
       method: "POST",
     }),
+  bazaarSearch: (q = "", limit = 30) =>
+    request<BazaarService[]>(
+      `/actions/bazaar?q=${encodeURIComponent(q)}&limit=${limit}`
+    ),
 };
+
+export interface BazaarService {
+  resource: string;
+  description: string;
+  amount_usd: number;
+  network: string;
+  pay_to: string;
+  payable_by_agent: boolean;
+  last_updated: string;
+}
 
 export interface Mandate {
   max_per_transaction: number;

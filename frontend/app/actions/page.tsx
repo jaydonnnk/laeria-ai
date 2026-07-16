@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, Mandate, PayAction } from "../../lib/api";
+import { api, BazaarService, Mandate, PayAction } from "../../lib/api";
 
 const STATUS_COLOR: Record<string, string> = {
   executed: "#1a7f37",
@@ -196,6 +196,14 @@ export default function Page() {
         </button>
       </section>
 
+      <BazaarSection
+        onProposed={async (outcome) => {
+          setInfo(outcome);
+          await refresh();
+        }}
+        onError={setError}
+      />
+
       <section>
         <h2>History</h2>
         <div style={{ display: "grid", gap: 8 }}>
@@ -227,6 +235,105 @@ export default function Page() {
         </div>
       </section>
     </main>
+  );
+}
+
+function BazaarSection({
+  onProposed,
+  onError,
+}: {
+  onProposed: (outcome: string) => Promise<void>;
+  onError: (e: string) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<BazaarService[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [paying, setPaying] = useState<string | null>(null);
+
+  async function search(e?: React.FormEvent) {
+    e?.preventDefault();
+    setSearching(true);
+    try {
+      setResults(await api.bazaarSearch(q, 20));
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function pay(s: BazaarService) {
+    setPaying(s.resource);
+    try {
+      const res = await api.proposeAction({
+        type: "purchase",
+        target_url: s.resource,
+        category: "bazaar",
+        description: `[Bazaar] ${s.description || s.resource}`.slice(0, 200),
+      });
+      await onProposed(res.outcome);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPaying(null);
+    }
+  }
+
+  return (
+    <section style={{ marginBottom: 28 }}>
+      <h2>Discover x402 services (Bazaar)</h2>
+      <p style={{ color: "#555", fontSize: 14 }}>
+        Real third-party services that accept agent payments — from
+        Coinbase&apos;s public index. Most run on Base <em>mainnet</em>: paying
+        them needs real USDC in the agent wallet (mandate caps apply).
+      </p>
+      <form onSubmit={search} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder='Filter, e.g. "chain", "search", "mail"'
+          style={{ ...inputStyle, maxWidth: 320 }}
+        />
+        <button type="submit" disabled={searching} style={smallButtonStyle}>
+          {searching ? "Searching…" : "Browse index"}
+        </button>
+      </form>
+      {results && results.length === 0 && (
+        <p style={{ color: "#888" }}>No listings matched.</p>
+      )}
+      {results && results.length > 0 && (
+        <div style={{ display: "grid", gap: 8 }}>
+          {results.map((s) => (
+            <div key={s.resource} style={{ ...cardStyle, padding: "10px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+                <span style={{ fontSize: 14, wordBreak: "break-all" }}>
+                  {s.resource}
+                  <span style={{ color: "#888", fontSize: 12 }}>
+                    {" "}· ${s.amount_usd} · {s.network}
+                  </span>
+                </span>
+                {s.payable_by_agent ? (
+                  <button
+                    onClick={() => pay(s)}
+                    disabled={paying !== null}
+                    style={smallButtonStyle}
+                  >
+                    {paying === s.resource ? "Paying…" : "Pay via agent"}
+                  </button>
+                ) : (
+                  <span style={{ color: "#aaa", fontSize: 12, whiteSpace: "nowrap" }}>
+                    not agent-payable
+                  </span>
+                )}
+              </div>
+              {s.description && (
+                <p style={{ margin: "4px 0 0", color: "#555", fontSize: 13 }}>{s.description}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
