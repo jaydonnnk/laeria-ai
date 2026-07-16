@@ -57,6 +57,7 @@ class LLMService:
             temperature=temperature,
             extra_body=self._EXTRA_BODY,
         )
+        _track(resp)
         return resp.choices[0].message.content or ""
 
     # Set to False the first time json mode comes back empty/broken for this
@@ -85,6 +86,7 @@ class LLMService:
                     response_format={"type": "json_object"},
                     extra_body=self._EXTRA_BODY,
                 )
+                _track(resp)
                 raw = resp.choices[0].message.content or ""
             except Exception as exc:  # noqa: BLE001
                 logger.warning("json mode raised (%s); falling back to plain", exc)
@@ -106,6 +108,32 @@ class LLMService:
             )
 
         return _parse_json_lenient(raw)
+
+    EMBED_MODEL = "openai/text-embedding-3-small"  # 1536-dim, matches schema
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts via OpenRouter's embeddings endpoint. One call for the
+        whole batch. Raises on failure — callers treat embedding as
+        best-effort and degrade gracefully."""
+        resp = self._client.embeddings.create(model=self.EMBED_MODEL, input=texts)
+        from core.usage import incr
+
+        incr("embed_calls")
+        # Preserve input order via the index field.
+        ordered = sorted(resp.data, key=lambda d: d.index)
+        return [d.embedding for d in ordered]
+
+
+def _track(resp) -> None:
+    """Record completion usage; never fatal."""
+    try:
+        from core.usage import incr
+
+        incr("llm_calls")
+        if getattr(resp, "usage", None) and resp.usage.total_tokens:
+            incr("llm_tokens", resp.usage.total_tokens)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _parse_json_lenient(raw: str) -> dict:

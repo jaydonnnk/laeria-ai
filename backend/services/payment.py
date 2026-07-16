@@ -185,6 +185,9 @@ class PaymentService:
             or ""
         )
         logger.info("paid %s: $%.4f (receipt %s...)", url, amount_usd, receipt[:24])
+        from core.usage import incr
+
+        incr("paid_usd", amount_usd)
         return {"content": paid.text, "receipt": receipt, "amount_usd": amount_usd}
 
 

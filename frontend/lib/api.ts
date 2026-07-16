@@ -157,7 +157,16 @@ export const api = {
     request<BazaarService[]>(
       `/actions/bazaar?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+  usage: () => request<UsageStats>("/usage"),
 };
+
+export interface UsageStats {
+  reddit_requests: number;
+  llm_calls: number;
+  llm_tokens: number;
+  embed_calls: number;
+  paid_usd: number;
+}
 
 export interface BazaarService {
   resource: string;

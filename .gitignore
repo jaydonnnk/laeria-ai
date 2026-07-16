@@ -45,3 +45,4 @@ local_data/
 
 # worker runtime log (laptop)
 backend/worker.log
+backend/usage_stats.json

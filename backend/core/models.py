@@ -60,6 +60,7 @@ class RedditThread(BaseModel):
     score: int = 0
     num_comments: int = 0
     created_utc: float = 0.0
+    author: str = ""
     author_account_age_days: int | None = None
     top_comments: list[str] = Field(default_factory=list)
 

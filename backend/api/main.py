@@ -48,3 +48,12 @@ app.include_router(vendor.router)  # x402: payment is the auth
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "env": settings.app_env, "version": "0.1.0"}
+
+
+@app.get("/usage", dependencies=_authed)
+def usage() -> dict:
+    """Resource consumption counters (Phase 5): Reddit requests, LLM
+    calls/tokens, embedding batches, executed payment volume."""
+    from core.usage import snapshot
+
+    return snapshot()

@@ -213,10 +213,19 @@ class ResearchAgent:
     def _synthesise(
         self, query: str, threads: list[RedditThread], subreddits: list[str]
     ) -> ResearchBrief:
+        from agents.signal_analysis import analyse_threads
+
+        threads, machine_warnings = analyse_threads(threads, self._llm)
         corpus = _build_corpus(threads)
+        analysis_block = (
+            "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
+            "red_flags/confidence):\n- " + "\n- ".join(machine_warnings)
+            if machine_warnings
+            else ""
+        )
         raw = self._llm.complete_json(
             _SYNTHESIS_SYSTEM,
-            f"Research query: {query}\n\nThread excerpts:\n\n{corpus}",
+            f"Research query: {query}\n\nThread excerpts:\n\n{corpus}{analysis_block}",
             max_tokens=2000,
         )
         # Guard against a transient model flake: valid JSON with every field
@@ -349,12 +358,21 @@ class ResearchAgent:
     def _synthesise_outcomes(
         self, decision: str, threads: list[RedditThread], retro_count: int
     ) -> OutcomeSummary:
+        from agents.signal_analysis import analyse_threads
+
+        threads, machine_warnings = analyse_threads(threads, self._llm)
         corpus = _build_corpus(threads)
+        analysis_block = (
+            "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
+            "sample_bias/confidence):\n- " + "\n- ".join(machine_warnings)
+            if machine_warnings
+            else ""
+        )
         raw = self._llm.complete_json(
             _OUTCOMES_SYSTEM,
             f"Decision: {decision}\n\nRetrospective threads (from people who "
             f"made this decision; {retro_count} identified in total, "
-            f"{len(threads)} read in full):\n\n{corpus}",
+            f"{len(threads)} read in full):\n\n{corpus}{analysis_block}",
             max_tokens=2500,
         )
         pct = raw.get("outcome_split", {})

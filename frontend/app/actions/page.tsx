@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, BazaarService, Mandate, PayAction } from "../../lib/api";
+import { api, BazaarService, Mandate, PayAction, UsageStats } from "../../lib/api";
 
 const STATUS_COLOR: Record<string, string> = {
   executed: "#1a7f37",
@@ -23,15 +23,21 @@ const DEFAULT_MANDATE: Mandate = {
 export default function Page() {
   const [mandate, setMandate] = useState<Mandate>(DEFAULT_MANDATE);
   const [actions, setActions] = useState<PayAction[]>([]);
+  const [usage, setUsage] = useState<UsageStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const [m, a] = await Promise.all([api.getMandate(), api.listPayActions()]);
+      const [m, a, u] = await Promise.all([
+        api.getMandate(),
+        api.listPayActions(),
+        api.usage().catch(() => null),
+      ]);
       setMandate({ ...DEFAULT_MANDATE, ...m });
       setActions(a);
+      setUsage(u);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -203,6 +209,26 @@ export default function Page() {
         }}
         onError={setError}
       />
+
+      {usage && (
+        <section style={{ marginBottom: 28 }}>
+          <h2>Agent resource usage</h2>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {[
+              ["Reddit requests", usage.reddit_requests.toLocaleString()],
+              ["LLM calls", usage.llm_calls.toLocaleString()],
+              ["LLM tokens", usage.llm_tokens.toLocaleString()],
+              ["Embedding batches", usage.embed_calls.toLocaleString()],
+              ["Paid via x402", `$${usage.paid_usd.toFixed(3)}`],
+            ].map(([label, value]) => (
+              <div key={label} style={{ ...cardStyle, padding: "10px 16px", minWidth: 140 }}>
+                <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+                <div style={{ color: "#888", fontSize: 12 }}>{label}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section>
         <h2>History</h2>

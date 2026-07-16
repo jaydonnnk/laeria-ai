@@ -106,6 +106,9 @@ class RedditService:
         self._pace()
         resp = self._client.get(path, params=params)
         self._last_request_at = time.monotonic()
+        from core.usage import incr
+
+        incr("reddit_requests")
         resp.raise_for_status()
         return resp
 
@@ -152,6 +155,7 @@ class RedditService:
                 continue
             title_a = el.select_one("a.search-title")
             time_el = el.select_one("time")
+            author_a = el.select_one("a.author")
             if subreddit is None:
                 sub_a = el.select_one("a.search-subreddit-link")
                 sub = sub_a.get_text(strip=True).removeprefix("r/") if sub_a else ""
@@ -161,6 +165,7 @@ class RedditService:
                 RedditThread(
                     id=fullname.removeprefix("t3_"),
                     subreddit=sub,
+                    author=author_a.get_text(strip=True) if author_a else "",
                     title=title_a.get_text(strip=True) if title_a else "",
                     url=(title_a.attrs.get("href", "") if title_a else ""),
                     score=self._parse_points(
@@ -247,6 +252,7 @@ class RedditService:
         return RedditThread(
             id=thread_id,
             subreddit=post.attrs.get("data-subreddit", ""),
+            author=post.attrs.get("data-author", ""),
             title=title_a.get_text(strip=True) if title_a else "",
             body=selftext_el.get_text(" ", strip=True) if selftext_el else "",
             url=f"https://old.reddit.com/comments/{thread_id}/",
