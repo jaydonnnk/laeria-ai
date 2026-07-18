@@ -85,14 +85,22 @@ class RedditService:
             follow_redirects=True,
             proxy=proxy,
         )
-        self._last_request_at = 0.0
 
     # ---- HTTP layer ----
 
+    # Pacing state is CLASS-level and lock-guarded: concurrent research runs
+    # each create their own RedditService, and per-instance pacing would let
+    # them stack up to a combined request rate Reddit flags. One shared gap
+    # for the whole process.
+    _pace_lock = __import__("threading").Lock()
+    _last_request_at = 0.0
+
     def _pace(self) -> None:
-        elapsed = time.monotonic() - self._last_request_at
-        if elapsed < _MIN_REQUEST_GAP_SECONDS:
-            time.sleep(_MIN_REQUEST_GAP_SECONDS - elapsed)
+        with RedditService._pace_lock:
+            elapsed = time.monotonic() - RedditService._last_request_at
+            if elapsed < _MIN_REQUEST_GAP_SECONDS:
+                time.sleep(_MIN_REQUEST_GAP_SECONDS - elapsed)
+            RedditService._last_request_at = time.monotonic()
 
     @retry(
         retry=retry_if_exception(_is_retryable),
@@ -105,7 +113,6 @@ class RedditService:
         backoff; raises on hard failures (403 = blocked, don't hammer)."""
         self._pace()
         resp = self._client.get(path, params=params)
-        self._last_request_at = time.monotonic()
         from core.usage import incr
 
         incr("reddit_requests")

@@ -126,6 +126,10 @@ export default function Page() {
             />{" "}
             Allow autonomous execution (within the limits below)
           </label>
+          <p style={{ margin: 0, color: "#9a6700", fontSize: 13 }}>
+            Note: 0 in any limit field means <strong>no cap</strong>, not zero
+            dollars. The autonomous toggle above is the master switch.
+          </p>
           <label style={labelStyle}>
             Max per transaction ($)
             <input

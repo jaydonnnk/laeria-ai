@@ -108,10 +108,17 @@ class PaymentService:
         return client
 
     def check_402(self, url: str) -> dict | None:
-        """GET the URL; if it answers 402, return a summary of the first
-        accepted payment option {amount_usd, network, pay_to, raw}."""
+        """GET the URL. 402 -> summary of the first accepted payment option
+        {amount_usd, network, pay_to, raw}. 2xx -> None (free resource).
+        Any other status RAISES: a failed price discovery must never be
+        treated as "free" — that would let mandate caps pass vacuously and
+        the later payment would pay whatever the vendor demands."""
         resp = self._http.get(url)
         if resp.status_code != 402:
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"price discovery failed: {url} returned {resp.status_code}"
+                )
             return None
         pr = _decode_payment_required(resp)
         if pr is None:
@@ -126,9 +133,13 @@ class PaymentService:
             "raw": pr,
         }
 
-    def pay_402(self, url: str) -> dict:
+    def pay_402(self, url: str, max_amount_usd: float | None = None) -> dict:
         """Full x402 buyer loop: hit URL; on 402 build a signed payment and
-        retry. Returns {content, receipt, amount_usd}."""
+        retry. Returns {content, receipt, amount_usd}.
+
+        max_amount_usd: hard price ceiling. If the vendor's asking price at
+        payment time exceeds it, refuse — defends against a price that
+        changed (or was hidden) between mandate check and execution."""
         from x402.http.constants import (
             PAYMENT_RESPONSE_HEADER,
             PAYMENT_SIGNATURE_HEADER,
@@ -148,6 +159,11 @@ class PaymentService:
 
         req = pr.accepts[0] if getattr(pr, "accepts", None) else None
         amount_usd = _requirement_amount_usd(req) if req else 0.0
+        if max_amount_usd is not None and amount_usd > max_amount_usd + 1e-9:
+            raise MandateViolation(
+                f"vendor asks ${amount_usd:.4f} but the approved ceiling is "
+                f"${max_amount_usd:.4f} — refusing (price changed since approval?)"
+            )
 
         client = self._signer_client()
         payload = client.create_payment_payload(pr)

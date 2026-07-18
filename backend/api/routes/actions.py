@@ -46,12 +46,35 @@ def _mandate() -> ActionMandate:
 
 
 def _execute(action_id: str, target_url: str) -> dict:
-    """Pay the target and mark the action executed. Failure marks it failed."""
+    """Pay the target and mark the action executed. Failure marks it failed.
+
+    Defense in depth: rediscovers the price at execution time and re-verifies
+    the hard mandate caps against the ACTUAL amount, then hands pay_402 that
+    amount as a ceiling. A price that appeared only after the mandate check
+    (vendor error during discovery, or a changed price) can therefore never
+    exceed the mandate."""
     from db import repositories as repo
-    from services.payment import PaymentService
+    from services.payment import MandateViolation, PaymentService
 
     try:
-        result = PaymentService().pay_402(target_url)
+        svc = PaymentService()
+        offer = svc.check_402(target_url)
+        actual = float(offer["amount_usd"]) if offer else 0.0
+        # Hard amount caps only — category/vendor were checked at propose and
+        # cannot have changed; a human already approved (or the mandate
+        # cleared) this action, so confirmation thresholds don't re-apply.
+        recheck_mandate = _mandate().model_copy(update={"allowed_categories": []})
+        svc.verify_within_mandate(
+            amount_usd=actual,
+            category="",
+            mandate=recheck_mandate,
+            spent_this_month=repo.executed_spend_this_month(),
+        )
+        result = svc.pay_402(target_url, max_amount_usd=actual)
+    except MandateViolation as exc:
+        repo.update_action(action_id, {"status": "cancelled",
+                                       "metadata": {"mandate_violation": str(exc)}})
+        raise HTTPException(status_code=409, detail=f"mandate violation at execution: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         repo.update_action(action_id, {"status": "failed", "metadata": {"error": str(exc)}})
         raise HTTPException(status_code=502, detail=f"execution failed: {exc}") from exc
@@ -131,8 +154,14 @@ def propose_action(req: ProposeRequest) -> dict:
     mandate = _mandate()
     svc = PaymentService()
 
-    # Price discovery: what does the target actually cost?
-    offer = svc.check_402(req.target_url)
+    # Price discovery: what does the target actually cost? A failed discovery
+    # refuses outright — never treat an unreachable/erroring vendor as free.
+    try:
+        offer = svc.check_402(req.target_url)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502, detail=f"price discovery failed: {exc}"
+        ) from exc
     amount = float(offer["amount_usd"]) if offer else 0.0
 
     try:

@@ -146,7 +146,27 @@ def run_cycle() -> None:
             logger.error("check failed for %s: %s", row.get("name"), exc)
 
 
+def _acquire_singleton_lock():
+    """Bind a localhost port as a cross-platform single-instance lock. The
+    Startup shortcut fires at every logon; without this, a still-running
+    worker plus a fresh logon means duplicate workers and duplicate runs.
+    Returns the held socket, or None when another instance already runs."""
+    import socket
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", 47931))
+        return s
+    except OSError:
+        s.close()
+        return None
+
+
 def main() -> None:
+    lock = _acquire_singleton_lock()
+    if lock is None:
+        logger.info("Another monitor worker is already running — exiting")
+        return
     logger.info("Monitor worker starting")
     while True:
         try:
