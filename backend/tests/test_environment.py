@@ -52,10 +52,14 @@ def main() -> int:
     from core.config import get_settings
     settings = get_settings()
 
-    soft_results.append(check(
-        "Stripe key present (STRIPE_API_KEY, test mode) [hackathon]",
-        lambda: getattr(settings, "stripe_api_key", "").startswith("sk_test_"),
-    ))
+    # Stripe key only matters when Stripe is the selected issuer (Issuing is
+    # unavailable to SG accounts — mock is the pre-event default, StraitsX
+    # sandbox arrives at the hackathon).
+    if settings.card_issuer == "stripe":
+        soft_results.append(check(
+            "Stripe key present (STRIPE_API_KEY, test mode) [hackathon]",
+            lambda: settings.stripe_api_key.startswith("sk_test_"),
+        ))
 
     def _playwright_launches() -> bool:
         from playwright.sync_api import sync_playwright
