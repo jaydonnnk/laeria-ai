@@ -10,6 +10,7 @@ create table if not exists profiles (
     id uuid primary key references auth.users (id) on delete cascade,
     obsidian_configured boolean not null default false,
     reddit_configured boolean not null default false,
+    mandate jsonb,                          -- standing ActionMandate (see core/models.py)
     created_at timestamptz not null default now()
 );
 

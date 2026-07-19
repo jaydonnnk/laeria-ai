@@ -47,6 +47,44 @@ def main() -> int:
     soft_ok = check("Obsidian (Local REST API) [optional]", ObsidianService().healthcheck)
     soft_results.append(soft_ok)
 
+    # Hackathon prep (card rail + storefront). Soft until those phases land,
+    # hard once the demo depends on them — flip lists then.
+    from core.config import get_settings
+    settings = get_settings()
+
+    soft_results.append(check(
+        "Stripe key present (STRIPE_API_KEY, test mode) [hackathon]",
+        lambda: getattr(settings, "stripe_api_key", "").startswith("sk_test_"),
+    ))
+
+    def _playwright_launches() -> bool:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return True
+
+    soft_results.append(check("Playwright Chromium launches [hackathon]", _playwright_launches))
+
+    def _store_reachable() -> bool:
+        import httpx
+        url = getattr(settings, "shop_store_url", "")
+        if not url:
+            return False
+        # Password-gated dev stores still answer; any HTTP response = reachable.
+        resp = httpx.get(f"{url.rstrip('/')}/products.json", follow_redirects=True, timeout=15)
+        return resp.status_code < 500
+
+    soft_results.append(check("Shopify store reachable (SHOP_STORE_URL) [hackathon]", _store_reachable))
+
+    def _mandate_column_exists() -> bool:
+        from db.client import get_supabase
+        # Selecting the column errors if it doesn't exist (migration 001 not applied).
+        get_supabase().table("profiles").select("mandate").limit(1).execute()
+        return True
+
+    soft_results.append(check("profiles.mandate column (migration 001) [hackathon]", _mandate_column_exists))
+
     print()
     if all(hard_results):
         print("All hard requirements PASSED. Cleared to start Phase 1.")
