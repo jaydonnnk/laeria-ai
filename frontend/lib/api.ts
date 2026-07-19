@@ -158,7 +158,42 @@ export const api = {
       `/actions/bazaar?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
   usage: () => request<UsageStats>("/usage"),
+
+  // Hackathon Phase 1: demo storefront discovery
+  storeSearch: (q = "", limit = 12) =>
+    request<StoreProduct[]>(
+      `/store/search?q=${encodeURIComponent(q)}&limit=${limit}`
+    ),
+  storeVerify: (handle: string) =>
+    request<StoreVerification>(`/store/product/${encodeURIComponent(handle)}/verify`, {
+      method: "POST",
+    }),
 };
+
+// Mirrors backend services/storefront.py _parse_product.
+export interface StoreProduct {
+  id: string;
+  handle: string;
+  title: string;
+  price_usd: number;
+  url: string;
+  image: string;
+  available: boolean;
+  variant_id: string;
+  product_type: string;
+  vendor: string;
+  tags: string;
+}
+
+// Mirrors backend services/storefront.py verify_product.
+export interface StoreVerification {
+  handle: string;
+  url: string;
+  price_usd: number;
+  available: boolean;
+  screenshot_path: string;
+  screenshot_data_url: string;
+}
 
 export interface UsageStats {
   reddit_requests: number;

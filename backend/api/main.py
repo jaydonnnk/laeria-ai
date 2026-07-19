@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import actions, monitor, obsidian, research, vendor
+from api.routes import actions, monitor, obsidian, research, store, vendor
 from core.auth import require_owner
 from core.config import get_settings
 from core.logging import configure_logging
@@ -42,6 +42,7 @@ app.include_router(research.router, dependencies=_authed)
 app.include_router(monitor.router, dependencies=_authed)
 app.include_router(obsidian.router, dependencies=_authed)
 app.include_router(actions.router, dependencies=_authed)
+app.include_router(store.router, dependencies=_authed)
 app.include_router(vendor.router)  # x402: payment is the auth
 
 

@@ -78,6 +78,8 @@ class Settings(BaseSettings):
     # "chromium" = Playwright-bundled build; "chrome" = system Chrome (Smart
     # App Control fallback — bundled build verified working 2026-07-19).
     playwright_channel: str = "chromium"
+    # Headed browser for stage demos (verify + checkout); headless for tests.
+    browser_headed: bool = False
 
     # App
     cors_origins: str = ""  # comma-separated; empty = allow all (dev)

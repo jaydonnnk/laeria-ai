@@ -47,4 +47,7 @@ local_data/
 backend/worker.log
 backend/usage_stats.json
 
+# storefront verification screenshots (audit-trail artifacts, machine-local)
+backend/screenshots/
+
 # Windows SAC workaround — pure-python bitarray lives only in the laptop venv

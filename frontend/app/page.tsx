@@ -53,6 +53,7 @@ export default function Home() {
         <li><a href="/research">Retrospective mining (Mode 1)</a></li>
         <li><a href="/monitor">Monitoring (Mode 3)</a></li>
         <li><a href="/actions">Actions &amp; mandate (payments)</a></li>
+        <li><a href="/commerce">Commerce (agent shopping)</a></li>
       </ul>
     </main>
   );
