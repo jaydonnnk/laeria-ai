@@ -97,6 +97,27 @@ create table if not exists actions (
     created_at timestamptz not null default now()
 );
 
+-- ---- Cards (hackathon Issuance pillar) ----
+-- No pan/cvc columns, ever — credentials live-fetch from the issuer only.
+create table if not exists cards (
+    id uuid primary key default gen_random_uuid(),
+    user_id uuid not null references auth.users (id) on delete cascade,
+    action_id uuid references actions (id) on delete set null,
+    issuer text not null,                        -- mock | stripe | straitsx
+    issuer_card_id text not null,
+    last4 text not null,
+    exp_month int not null,
+    exp_year int not null,
+    spend_limit_usd numeric not null default 0,
+    status text not null default 'active'
+        check (status in ('issued', 'active', 'canceled')),
+    metadata jsonb not null default '{}',
+    created_at timestamptz not null default now(),
+    canceled_at timestamptz
+);
+
+create index if not exists cards_user_created_idx on cards (user_id, created_at desc);
+
 -- ---- Thread embeddings (Phase 5 dedup) ----
 create table if not exists thread_embeddings (
     id uuid primary key default gen_random_uuid(),
@@ -126,6 +147,7 @@ alter table monitored_items enable row level security;
 alter table monitor_runs enable row level security;
 alter table monitor_alerts enable row level security;
 alter table actions enable row level security;
+alter table cards enable row level security;
 
 -- Owner-only policies (user can see only their own rows).
 create policy "own_profile" on profiles
@@ -138,6 +160,9 @@ create policy "own_monitored_items" on monitored_items
     for all using (auth.uid() = user_id);
 
 create policy "own_actions" on actions
+    for all using (auth.uid() = user_id);
+
+create policy "own_cards" on cards
     for all using (auth.uid() = user_id);
 
 -- Child tables inherit access via their parent's user_id.

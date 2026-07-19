@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { api, StoreProduct, StoreVerification } from "../../lib/api";
+import { useCallback, useEffect, useState } from "react";
+import CardView from "../../components/CardView";
+import { api, Card, StoreProduct, StoreVerification } from "../../lib/api";
 
 // Hackathon Phase 1 — Discovery: search the demo storefront, then have the
 // agent open the live product page in a real browser to verify price and
@@ -154,7 +155,78 @@ export default function Page() {
           })}
         </div>
       )}
+
+      <CardsSection onError={setError} />
     </main>
+  );
+}
+
+function CardsSection({ onError }: { onError: (e: string) => void }) {
+  const [cards, setCards] = useState<Card[] | null>(null);
+  const [limit, setLimit] = useState("25");
+  const [issuing, setIssuing] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setCards(await api.listCards());
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function testIssue(e: React.FormEvent) {
+    e.preventDefault();
+    setIssuing(true);
+    try {
+      await api.testIssueCard(Number(limit) || 1, "dev test issue");
+      await refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIssuing(false);
+    }
+  }
+
+  return (
+    <section style={{ marginTop: 32 }}>
+      <h2>Disposable cards</h2>
+      <p style={{ color: "#555", fontSize: 14 }}>
+        Virtual cards issued to the agent, one per approved purchase, spending
+        limit pinned to the approved amount, canceled after use. Card numbers
+        are never stored — &ldquo;Reveal&rdquo; fetches them live from the
+        issuer.
+      </p>
+      <form onSubmit={testIssue} style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center" }}>
+        <label style={{ fontSize: 13, color: "#555" }}>
+          Limit ($){" "}
+          <input
+            type="number"
+            step="0.01"
+            min="0.01"
+            value={limit}
+            onChange={(e) => setLimit(e.target.value)}
+            style={{ ...inputStyle, maxWidth: 100 }}
+          />
+        </label>
+        <button type="submit" disabled={issuing} style={smallButtonStyle}>
+          {issuing ? "Issuing…" : "Issue test card"}
+        </button>
+      </form>
+      {cards && cards.length === 0 && (
+        <p style={{ color: "#888" }}>No cards issued yet.</p>
+      )}
+      {cards && cards.length > 0 && (
+        <div style={{ display: "grid", gap: 20 }}>
+          {cards.map((c) => (
+            <CardView key={c.id} card={c} onChanged={refresh} onError={onError} />
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 

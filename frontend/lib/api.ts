@@ -168,7 +168,53 @@ export const api = {
     request<StoreVerification>(`/store/product/${encodeURIComponent(handle)}/verify`, {
       method: "POST",
     }),
+
+  // Hackathon Phase 2: disposable virtual cards
+  listCards: () => request<Card[]>("/cards/"),
+  testIssueCard: (amount_limit_usd: number, merchant_hint = "") =>
+    request<Card>("/cards/test-issue", {
+      method: "POST",
+      body: JSON.stringify({ amount_limit_usd, merchant_hint }),
+    }),
+  cardDetails: (id: string) => request<CardDetails>(`/cards/${id}/details`),
+  cancelCard: (id: string) =>
+    request<Card>(`/cards/${id}/cancel`, { method: "POST" }),
+  cardTransactions: (id: string) =>
+    request<CardTransaction[]>(`/cards/${id}/transactions`),
 };
+
+// Mirrors backend cards table rows (no PAN/CVC — live-fetched only).
+export interface Card {
+  id: string;
+  action_id: string | null;
+  issuer: string;
+  issuer_card_id: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  spend_limit_usd: number;
+  status: "issued" | "active" | "canceled";
+  metadata: Record<string, unknown>;
+  created_at: string;
+  canceled_at: string | null;
+}
+
+// Mirrors backend services/cards.py CardDetails — shown transiently, never stored.
+export interface CardDetails {
+  number: string;
+  cvc: string;
+  exp_month: number;
+  exp_year: number;
+  brand: string;
+  name: string;
+}
+
+export interface CardTransaction {
+  id: string;
+  amount_usd: number;
+  type: string;
+  created: string;
+}
 
 // Mirrors backend services/storefront.py _parse_product.
 export interface StoreProduct {

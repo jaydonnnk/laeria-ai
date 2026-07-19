@@ -283,6 +283,76 @@ def update_action(action_id: str, fields: dict[str, Any]) -> dict | None:
     return res.data[0] if res.data else None
 
 
+# ---- cards (hackathon Issuance pillar) ----
+
+def create_card(
+    issuer: str,
+    issuer_card_id: str,
+    last4: str,
+    exp_month: int,
+    exp_year: int,
+    spend_limit_usd: float,
+    status: str = "active",
+    action_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict:
+    row = {
+        "user_id": _owner(),
+        "issuer": issuer,
+        "issuer_card_id": issuer_card_id,
+        "last4": last4,
+        "exp_month": exp_month,
+        "exp_year": exp_year,
+        "spend_limit_usd": spend_limit_usd,
+        "status": status,
+        "action_id": action_id,
+        "metadata": metadata or {},
+    }
+    res = get_supabase().table("cards").insert(row).execute()
+    return res.data[0]
+
+
+def get_card(card_id: str) -> dict | None:
+    res = (
+        get_supabase()
+        .table("cards")
+        .select("*")
+        .eq("user_id", _owner())
+        .eq("id", card_id)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def list_cards(limit: int = 50) -> list[dict]:
+    return (
+        get_supabase()
+        .table("cards")
+        .select("*")
+        .eq("user_id", _owner())
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+    )
+
+
+def update_card_status(card_id: str, status: str) -> dict | None:
+    fields: dict[str, Any] = {"status": status}
+    if status == "canceled":
+        fields["canceled_at"] = datetime.now(timezone.utc).isoformat()
+    res = (
+        get_supabase()
+        .table("cards")
+        .update(fields)
+        .eq("user_id", _owner())
+        .eq("id", card_id)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
 def executed_spend_this_month() -> float:
     """Sum of executed action amounts since the 1st of the current month —
     the number the mandate's monthly cap is enforced against."""
