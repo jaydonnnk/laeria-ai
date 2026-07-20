@@ -20,8 +20,10 @@ logger = get_logger(__name__)
 
 _DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
 
-# Networks our signer can actually pay on (EVM exact scheme).
-PAYABLE_NETWORKS = {"eip155:8453", "eip155:84532"}
+# Networks our signer can actually pay on (EVM exact scheme). Fuji included
+# for the hackathon rail swap — the signer registers it via
+# X402_EXTRA_NETWORKS (see docs/HACKATHON_SWAP.md).
+PAYABLE_NETWORKS = {"eip155:8453", "eip155:84532", "eip155:43113"}
 
 
 def _parse_item(item: dict) -> dict | None:

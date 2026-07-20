@@ -98,10 +98,16 @@ class PaymentService:
             raise RuntimeError("X402_AGENT_PRIVATE_KEY not configured in .env")
         account = Account.from_key(key)
         client = x402ClientSync()
-        # Register both the configured network and Base mainnet: Bazaar
-        # services are mainnet, our demo vendor is testnet. Same wallet signs
-        # for both; whether a payment succeeds depends on funding that network.
+        # Register the configured network, Base mainnet (Bazaar services are
+        # mainnet, our demo vendor is testnet), and any extra networks from
+        # config (e.g. Avalanche Fuji for the hackathon rail swap — one env
+        # var, no code change). Same wallet signs for all; whether a payment
+        # succeeds depends on that network actually being funded.
         networks = {self._settings.x402_network, "eip155:8453"}
+        if self._settings.x402_extra_networks:
+            networks.update(
+                n.strip() for n in self._settings.x402_extra_networks.split(",") if n.strip()
+            )
         register_exact_evm_client(
             client, EthAccountSigner(account), networks=sorted(networks)
         )

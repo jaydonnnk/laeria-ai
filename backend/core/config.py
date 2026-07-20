@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     x402_agent_address: str = ""
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
+    # Comma-separated extra networks to register the signer for, beyond
+    # x402_network + Base mainnet — e.g. "eip155:43113" for Avalanche Fuji.
+    # See docs/HACKATHON_SWAP.md.
+    x402_extra_networks: str = ""
 
     # Where agent-initiated purchases/replacements are executed. Points at our
     # own x402 vendor until real x402 merchants exist — swap when they do.
