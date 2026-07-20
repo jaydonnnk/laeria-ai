@@ -37,6 +37,12 @@ class ProposeRequest(BaseModel):
     target_url: str = Field(min_length=8, max_length=500)
     category: str = ""
     description: str = ""
+    # Payment rail: "x402" (crypto, the original path) or "card" (disposable
+    # virtual card + browser checkout on the demo storefront).
+    rail: str = Field(default="x402", pattern="^(x402|card)$")
+    # Card rail only: which storefront product is being bought.
+    product_handle: str = ""
+    variant_id: str = ""
 
 
 def _mandate() -> ActionMandate:
@@ -86,6 +92,153 @@ def _execute(action_id: str, target_url: str) -> dict:
             "metadata": {
                 "receipt": result["receipt"],
                 "content_preview": (result["content"] or "")[:400],
+            },
+        },
+    )
+
+
+def _execute_card_purchase(action: dict) -> dict:
+    """Card-rail execution: browser-verify the live price, re-check the hard
+    caps, issue a disposable card capped just above that price, drive the
+    checkout (which re-reads the total from the checkout page before card
+    entry — third verification layer), then cancel the card no matter what.
+
+    The card dies in the finally block: success or failure, a disposable
+    card never outlives its one purchase attempt."""
+    from db import repositories as repo
+    from services.cards import StripeIssuingAdapter, get_issuer
+    from services.checkout import (
+        CheckoutCeilingViolation,
+        execute_checkout,
+        shipping_from_settings,
+    )
+    from services.payment import MandateViolation, PaymentService
+    from services.storefront import StorefrontService
+
+    action_id = action["id"]
+    meta = dict(action.get("metadata") or {})
+    handle = meta.get("product_handle", "")
+    variant_id = meta.get("variant_id", "")
+
+    try:
+        # Live DOM price — what a human buyer sees right now.
+        store = StorefrontService()
+        verification = store.verify_product(handle)
+        dom_price = float(verification["price_usd"])
+        if dom_price <= 0:
+            raise RuntimeError("could not read a live price from the product page")
+        if not verification["available"]:
+            raise RuntimeError("product is no longer available")
+        # Products with subscription selling plans expose the plan price in
+        # og:price while the cart charges the one-time price — verify against
+        # the HIGHER of DOM and listing so the ceiling covers what checkout
+        # will actually charge (the in-checkout total gate still has the
+        # final word).
+        actual = max(dom_price, float(action.get("amount_usd") or 0))
+
+        recheck_mandate = _mandate().model_copy(update={"allowed_categories": []})
+        PaymentService().verify_within_mandate(
+            amount_usd=actual,
+            category="",
+            mandate=recheck_mandate,
+            spent_this_month=repo.executed_spend_this_month(),
+        )
+    except MandateViolation as exc:
+        repo.update_action(action_id, {"status": "cancelled",
+                                       "metadata": {**meta, "mandate_violation": str(exc)}})
+        raise HTTPException(status_code=409, detail=f"mandate violation at execution: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        repo.update_action(action_id, {"status": "failed",
+                                       "metadata": {**meta, "error": str(exc)}})
+        raise HTTPException(status_code=502, detail=f"execution failed: {exc}") from exc
+
+    # Ceiling for the card limit AND the in-checkout total gate: verified
+    # price + shipping/taxes allowance, hard-clamped to whatever mandate
+    # headroom remains. The final checkout total must fit under this or the
+    # executor refuses before card entry.
+    from core.config import get_settings
+
+    mandate_now = _mandate()
+    headrooms = [
+        float(actual) * 1.05 + get_settings().checkout_shipping_buffer_usd
+    ]
+    if mandate_now.max_per_transaction > 0:
+        headrooms.append(mandate_now.max_per_transaction)
+    if mandate_now.max_per_month > 0:
+        headrooms.append(
+            mandate_now.max_per_month - repo.executed_spend_this_month()
+        )
+    ceiling = round(max(min(headrooms), 0.0), 2)
+    issuer = get_issuer()
+    issued = None
+    card_row = None
+    try:
+        issued = issuer.issue(ceiling, merchant_hint=meta.get("description", "")[:80])
+        card_row = repo.create_card(
+            issuer=issued.issuer,
+            issuer_card_id=issued.issuer_card_id,
+            last4=issued.last4,
+            exp_month=issued.exp_month,
+            exp_year=issued.exp_year,
+            spend_limit_usd=issued.spend_limit_usd,
+            status="active",
+            action_id=action_id,
+            metadata={"product_handle": handle},
+        )
+        details = issuer.get_details(issued.issuer_card_id)
+        result = execute_checkout(
+            variant_id=variant_id,
+            card=details,
+            shipping=shipping_from_settings(),
+            mandate_ceiling_usd=ceiling,
+            session_cookies=store._session_cookies(),
+        )
+        # Bogus profile: the storefront gateway saw the magic PAN, so put a
+        # matching REAL authorization on the issued card where the issuer
+        # supports simulation — the card of record shows the transaction.
+        auth_id = None
+        if result.pan_shim and isinstance(issuer, StripeIssuingAdapter):
+            try:
+                auth_id = issuer.simulate_authorization(
+                    issued.issuer_card_id, result.total_usd
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("issuer auth simulation failed: %s", exc)
+    except CheckoutCeilingViolation as exc:
+        repo.update_action(action_id, {"status": "cancelled",
+                                       "metadata": {**meta, "mandate_violation": str(exc)}})
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        repo.update_action(action_id, {"status": "failed",
+                                       "metadata": {**meta, "error": str(exc)}})
+        raise HTTPException(status_code=502, detail=f"execution failed: {exc}") from exc
+    finally:
+        # Disposable means disposable — the card dies here on every path.
+        if issued is not None:
+            try:
+                issuer.cancel(issued.issuer_card_id)
+                if card_row is not None:
+                    repo.update_card_status(card_row["id"], "canceled")
+            except Exception as exc:  # noqa: BLE001
+                logger.error("card cancel after checkout failed: %s", exc)
+
+    return repo.update_action(
+        action_id,
+        {
+            "status": "executed",
+            "amount_usd": result.total_usd,
+            "metadata": {
+                **meta,
+                "rail": "card",
+                "order_reference": result.order_reference,
+                "gateway_profile": result.gateway_profile,
+                "pan_shim": result.pan_shim,
+                "card_id": card_row["id"] if card_row else None,
+                "card_last4": issued.last4 if issued else None,
+                "issuer_authorization": auth_id,
+                "checkout_screenshots": result.screenshots,
+                "verified_price_usd": actual,
+                "product_screenshot": verification["screenshot_path"],
             },
         },
     )
@@ -156,13 +309,42 @@ def propose_action(req: ProposeRequest) -> dict:
 
     # Price discovery: what does the target actually cost? A failed discovery
     # refuses outright — never treat an unreachable/erroring vendor as free.
-    try:
-        offer = svc.check_402(req.target_url)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=502, detail=f"price discovery failed: {exc}"
-        ) from exc
-    amount = float(offer["amount_usd"]) if offer else 0.0
+    if req.rail == "card":
+        if req.type != "purchase":
+            raise HTTPException(status_code=422, detail="card rail supports purchases only")
+        if not req.product_handle or not req.variant_id:
+            raise HTTPException(
+                status_code=422, detail="card rail needs product_handle and variant_id"
+            )
+        from services.storefront import StorefrontService
+
+        try:
+            matches = [
+                p for p in StorefrontService().search_products(limit=50)
+                if p["handle"] == req.product_handle
+            ]
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502, detail=f"price discovery failed: {exc}"
+            ) from exc
+        if not matches:
+            raise HTTPException(status_code=404, detail="product not found in store")
+        amount = float(matches[0]["price_usd"])
+        if amount <= 0:
+            raise HTTPException(status_code=502, detail="product has no readable price")
+    else:
+        try:
+            offer = svc.check_402(req.target_url)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502, detail=f"price discovery failed: {exc}"
+            ) from exc
+        amount = float(offer["amount_usd"]) if offer else 0.0
+
+    base_meta: dict = {"description": req.description, "rail": req.rail}
+    if req.rail == "card":
+        base_meta["product_handle"] = req.product_handle
+        base_meta["variant_id"] = req.variant_id
 
     try:
         needs_confirmation, reason = svc.verify_within_mandate(
@@ -175,7 +357,7 @@ def propose_action(req: ProposeRequest) -> dict:
     except MandateViolation as exc:
         action = repo.create_action(
             req.type, req.target_url, "cancelled", amount,
-            {"description": req.description, "mandate_violation": str(exc)},
+            {**base_meta, "mandate_violation": str(exc)},
         )
         return {"action": action, "outcome": f"refused: {exc}"}
 
@@ -186,15 +368,18 @@ def propose_action(req: ProposeRequest) -> dict:
     if needs_confirmation:
         action = repo.create_action(
             req.type, req.target_url, "pending_approval", amount,
-            {"description": req.description, "reason": reason, "expires_at": expires_at},
+            {**base_meta, "reason": reason, "expires_at": expires_at},
         )
         return {"action": action, "outcome": f"awaiting approval: {reason}"}
 
     action = repo.create_action(
         req.type, req.target_url, "approved", amount,
-        {"description": req.description, "reason": reason},
+        {**base_meta, "reason": reason},
     )
-    executed = _execute(action["id"], req.target_url)
+    if req.rail == "card":
+        executed = _execute_card_purchase(action)
+    else:
+        executed = _execute(action["id"], req.target_url)
     return {"action": executed, "outcome": "executed autonomously (within mandate)"}
 
 
@@ -221,6 +406,10 @@ def approve_action(action_id: str) -> dict:
             "outcome": "approved — cancellation logged; finish it in the "
             "service's account settings (no cancel API exists)",
         }
+
+    if (action.get("metadata") or {}).get("rail") == "card":
+        executed = _execute_card_purchase(action)
+        return {"action": executed, "outcome": "approved and executed (card rail)"}
 
     executed = _execute(action_id, action["target"])
     return {"action": executed, "outcome": "approved and executed"}

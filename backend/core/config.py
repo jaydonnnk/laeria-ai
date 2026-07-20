@@ -81,6 +81,23 @@ class Settings(BaseSettings):
     # Headed browser for stage demos (verify + checkout); headless for tests.
     browser_headed: bool = False
 
+    # Demo shipping profile the checkout executor fills in (test orders only).
+    # Defaults are US because a fresh dev store's only shipping zone is US —
+    # a non-US address gets no shipping method and the checkout stalls.
+    shipping_name: str = "Baryon Agent"
+    # Must be a resolvable domain — Shopify checkout rejects invented TLDs.
+    shipping_email: str = "baryon.agent.demo@gmail.com"
+    shipping_address1: str = "123 Demo Street"
+    shipping_city: str = "San Francisco"
+    shipping_postal_code: str = "94111"
+    shipping_country: str = "US"
+    shipping_zone: str = "CA"
+    # Shipping/taxes allowance on top of the verified product price when
+    # sizing the card limit and checkout ceiling. The mandate caps still
+    # bound the final number — this only stops shipping from tripping the
+    # gate on an otherwise-approved purchase.
+    checkout_shipping_buffer_usd: float = 20.0
+
     # App
     cors_origins: str = ""  # comma-separated; empty = allow all (dev)
     app_env: str = "development"

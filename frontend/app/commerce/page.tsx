@@ -15,7 +15,9 @@ export default function Page() {
   const [searching, setSearching] = useState(false);
   const [verifying, setVerifying] = useState<string | null>(null);
   const [verifications, setVerifications] = useState<Record<string, StoreVerification>>({});
+  const [buying, setBuying] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   async function search(e?: React.FormEvent) {
     e?.preventDefault();
@@ -27,6 +29,35 @@ export default function Page() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSearching(false);
+    }
+  }
+
+  async function buy(p: StoreProduct) {
+    setBuying(p.handle);
+    setError(null);
+    setInfo(null);
+    try {
+      const res = await api.proposeAction({
+        type: "purchase",
+        target_url: p.url,
+        category: "commerce",
+        description: `[Store] ${p.title}`.slice(0, 200),
+        rail: "card",
+        product_handle: p.handle,
+        variant_id: p.variant_id,
+      });
+      const status = res.action.status;
+      if (status === "pending_approval") {
+        setInfo(
+          `${res.outcome} — approve it on the Actions page within 10 minutes.`
+        );
+      } else {
+        setInfo(res.outcome);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBuying(null);
     }
   }
 
@@ -55,6 +86,7 @@ export default function Page() {
       </p>
 
       {error && <p style={{ color: "#cf222e" }}>{error}</p>}
+      {info && <p style={{ color: "#1a7f37" }}>{info}</p>}
 
       <form onSubmit={search} style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <input
@@ -110,6 +142,13 @@ export default function Page() {
                         {verifying === p.handle
                           ? "Agent scanning page…"
                           : "Verify with agent"}
+                      </button>
+                      <button
+                        onClick={() => buy(p)}
+                        disabled={buying !== null || !p.available}
+                        style={{ ...smallButtonStyle, background: "#1f2328", color: "#fff", border: "none" }}
+                      >
+                        {buying === p.handle ? "Agent buying…" : "Buy with agent"}
                       </button>
                       <a href={p.url} target="_blank" rel="noreferrer" style={{ fontSize: 13 }}>
                         open page

@@ -140,6 +140,9 @@ export const api = {
     target_url: string;
     category?: string;
     description?: string;
+    rail?: "x402" | "card";
+    product_handle?: string;
+    variant_id?: string;
   }) =>
     request<{ action: PayAction; outcome: string }>("/actions/propose", {
       method: "POST",
