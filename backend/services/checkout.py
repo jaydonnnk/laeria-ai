@@ -113,6 +113,8 @@ def execute_checkout(
     shots: list[str] = []
 
     def shot(page, name: str) -> None:  # noqa: ANN001
+        if page is None:  # failed before the page existed
+            return
         path = _SCREENSHOT_DIR / f"{stamp}-{name}.png"
         try:
             page.screenshot(path=str(path))
@@ -126,6 +128,7 @@ def execute_checkout(
 
     with sync_playwright() as p:
         browser = p.chromium.launch(**launch_kwargs)
+        page = None
         try:
             context = browser.new_context(viewport={"width": 1280, "height": 950})
             context.add_cookies(session_cookies)

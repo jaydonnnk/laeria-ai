@@ -183,7 +183,7 @@ class StorefrontService:
 
         url = f"{self._base}/products/{handle}"
         _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
-        shot_path = _SCREENSHOT_DIR / f"{handle}-{int(time.time())}.png"
+        shot_path = _SCREENSHOT_DIR / f"{handle}-{int(time.time() * 1000)}.png"
 
         with sync_playwright() as p:
             browser = p.chromium.launch(**self._launch_kwargs())
