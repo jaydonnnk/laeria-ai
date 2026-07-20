@@ -87,6 +87,12 @@ def main() -> int:
 
     soft_results.append(check("Card issuer (CARD_ISSUER) [hackathon]", _card_issuer_ok))
 
+    def _wallet_rpc_ok() -> bool:
+        from services.wallet import WalletService
+        return WalletService().healthcheck()
+
+    soft_results.append(check("Wallet RPC (X402_NETWORK chain) [hackathon]", _wallet_rpc_ok))
+
     def _mandate_column_exists() -> bool:
         from db.client import get_supabase
         # Selecting the column errors if it doesn't exist (migration 001 not applied).

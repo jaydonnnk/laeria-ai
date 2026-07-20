@@ -184,7 +184,53 @@ export const api = {
     request<Card>(`/cards/${id}/cancel`, { method: "POST" }),
   cardTransactions: (id: string) =>
     request<CardTransaction[]>(`/cards/${id}/transactions`),
+
+  // Hackathon Phase 4: funding
+  walletBalances: () => request<WalletBalances>("/wallet/balances"),
+  walletFund: (amount_usd: number) =>
+    request<FundResult>("/wallet/fund", {
+      method: "POST",
+      body: JSON.stringify({ amount_usd }),
+    }),
+
+  // Audit-trail screenshots need the auth header, so <img src> can't load
+  // them directly — fetch as a blob and hand back an object URL.
+  screenshotUrl: async (category: "store" | "checkout", path: string) => {
+    const filename = path.replace(/\\/g, "/").split("/").pop() ?? "";
+    const { data } = await supabase.auth.getSession();
+    const res = await fetch(
+      `${API_URL}/store/screenshot/${category}/${encodeURIComponent(filename)}`,
+      { headers: { Authorization: `Bearer ${data.session?.access_token}` } }
+    );
+    if (!res.ok) throw new Error(`screenshot ${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
 };
+
+export interface WalletParty {
+  address: string;
+  usdc?: number;
+  native?: number;
+  error?: string;
+}
+
+export interface WalletBalances {
+  network: string;
+  network_id: string;
+  native_symbol: string;
+  usdc_contract: string;
+  agent: WalletParty;
+  treasury: WalletParty;
+}
+
+export interface FundResult {
+  tx_hash: string;
+  explorer_url: string;
+  amount_usd: number;
+  from: string;
+  to: string;
+  network: string;
+}
 
 // Mirrors backend cards table rows (no PAN/CVC — live-fetched only).
 export interface Card {
