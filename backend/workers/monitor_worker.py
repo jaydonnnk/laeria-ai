@@ -1,7 +1,7 @@
 """Monitor worker — long-running background job for Mode 3.
 
 Deployment target is the Hetzner VPS as a systemd service (see
-infra/systemd/baryon-monitor.service); it also runs fine locally with
+infra/systemd/laeria-monitor.service); it also runs fine locally with
 `python -m workers.monitor_worker`.
 
 Wakes every POLL_SLEEP_SECONDS, checks only the items whose interval has

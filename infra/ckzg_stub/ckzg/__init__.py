@@ -3,7 +3,7 @@
 Windows Smart App Control blocks ckzg's unsigned C extension DLL, which
 breaks `import eth_account` entirely (its typed_transactions module imports
 ckzg at module load). ckzg is only actually CALLED for EIP-4844 blob
-transactions (type 3), which baryon never creates — legacy and EIP-1559
+transactions (type 3), which laeria never creates — legacy and EIP-1559
 transactions and EIP-712 signing don't touch KZG commitments.
 
 Same treatment as infra/bitarray_stub: copy this package over
@@ -14,7 +14,7 @@ would restore the blocked DLL.
 _MSG = (
     "ckzg is stubbed out on this machine (Windows Smart App Control blocks the "
     "native DLL). Blob (EIP-4844) transactions are not supported — and nothing "
-    "in baryon should be sending them."
+    "in laeria should be sending them."
 )
 
 

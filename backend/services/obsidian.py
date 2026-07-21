@@ -116,9 +116,9 @@ class ObsidianService:
         return items
 
     def write_alert_note(self, alert_summary: str) -> None:
-        """Append an alert line to 'baryon alerts.md' in the vault root."""
+        """Append an alert line to 'laeria alerts.md' in the vault root."""
         resp = httpx.post(
-            f"{self._base_url}/vault/baryon alerts.md",
+            f"{self._base_url}/vault/laeria alerts.md",
             headers={**self._headers, "Content-Type": "text/markdown"},
             content=f"\n- {alert_summary}\n",
             verify=self._verify,
@@ -127,12 +127,12 @@ class ObsidianService:
         resp.raise_for_status()
 
     def write_action_log(self, action_summary: str) -> None:
-        """Append an entry to 'baryon actions.md' in the vault root."""
+        """Append an entry to 'laeria actions.md' in the vault root."""
         from datetime import datetime, timezone
 
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         resp = httpx.post(
-            f"{self._base_url}/vault/baryon actions.md",
+            f"{self._base_url}/vault/laeria actions.md",
             headers={**self._headers, "Content-Type": "text/markdown"},
             content=f"\n- {stamp} — {action_summary}\n",
             verify=self._verify,

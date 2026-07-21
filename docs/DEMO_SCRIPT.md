@@ -1,4 +1,4 @@
-# Demo Script — baryon.ai @ Payment-Lifecycle Hackathon
+# Demo Script — laeria.ai @ Payment-Lifecycle Hackathon
 
 Target: **under 3 minutes of live pipeline**, plus narration. Rehearse twice
 on the stage laptop before submitting. Companion doc: `HACKATHON_SWAP.md`
@@ -24,7 +24,7 @@ on the stage laptop before submitting. Companion doc: `HACKATHON_SWAP.md`
 ## The demo (beats)
 
 **0:00 — Frame (talk over `/commerce`)**
-"baryon is a personal agent that already researches purchases on Reddit and
+"laeria is a personal agent that already researches purchases on Reddit and
 pays for things under a signed spending mandate — that part is prior work.
 This weekend we gave it the full card lifecycle: fund, discover, issue,
 execute — with the mandate enforced at every layer."

@@ -22,7 +22,7 @@ configure_logging()
 settings = get_settings()
 
 app = FastAPI(
-    title="baryon.ai",
+    title="laeria.ai",
     version="0.1.0",
     description="Reddit-as-human-signal research and monitoring.",
 )

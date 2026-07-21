@@ -90,7 +90,7 @@ export default function CardView({
           {number}
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-          <span>{details ? details.name : "BARYON AGENT"}</span>
+          <span>{details ? details.name : "LAERIA AGENT"}</span>
           <span>
             {String(card.exp_month).padStart(2, "0")}/{card.exp_year % 100}
             {details && <span> · CVC {details.cvc}</span>}

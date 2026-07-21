@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Reddit
     reddit_client_id: str = ""
     reddit_client_secret: str = ""
-    reddit_user_agent: str = "baryon.ai/0.1"
+    reddit_user_agent: str = "laeria.ai/0.1"
     reddit_username: str = ""
     reddit_password: str = ""
     # Optional egress proxy for Reddit requests. Datacenter IPs (Hetzner etc.)
@@ -88,9 +88,9 @@ class Settings(BaseSettings):
     # Demo shipping profile the checkout executor fills in (test orders only).
     # Defaults are US because a fresh dev store's only shipping zone is US —
     # a non-US address gets no shipping method and the checkout stalls.
-    shipping_name: str = "Baryon Agent"
+    shipping_name: str = "Laeria Agent"
     # Must be a resolvable domain — Shopify checkout rejects invented TLDs.
-    shipping_email: str = "baryon.agent.demo@gmail.com"
+    shipping_email: str = "laeria.agent.demo@gmail.com"
     shipping_address1: str = "123 Demo Street"
     shipping_city: str = "San Francisco"
     shipping_postal_code: str = "94111"

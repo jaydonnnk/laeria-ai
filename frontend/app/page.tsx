@@ -20,7 +20,7 @@ export default function Home() {
   return (
     <main style={{ maxWidth: 640, margin: "80px auto", padding: "0 24px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h1>baryon.ai</h1>
+        <h1>laeria.ai</h1>
         {email ? (
           <span style={{ fontSize: 13, color: "#888" }}>
             {email}{" "}

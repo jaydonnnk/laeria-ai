@@ -78,7 +78,7 @@ class CardIssuer(ABC):
 
 # ---- Stripe Issuing (test mode) ----
 
-_CARDHOLDER_NAME = "Baryon Agent"
+_CARDHOLDER_NAME = "Laeria Agent"
 # Cardholder needs a billing address; any plausible one works in test mode.
 _TEST_BILLING = {
     "address": {
@@ -118,7 +118,7 @@ class StripeIssuingAdapter(CardIssuer):
         ch = self._stripe.issuing.Cardholder.create(
             type="individual",
             name=_CARDHOLDER_NAME,
-            email="agent@baryon.local",
+            email="agent@laeria.local",
             billing=_TEST_BILLING,
         )
         logger.info("created Stripe test cardholder %s — pin it in .env", ch.id)

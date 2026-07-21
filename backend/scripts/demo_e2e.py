@@ -126,7 +126,7 @@ def main() -> int:
                         help="also run one full card-rail purchase")
     args = parser.parse_args()
 
-    print("baryon.ai demo prep\n")
+    print("laeria.ai demo prep\n")
     print("reset:")
     ok = _reset()
     print("checks:")

@@ -27,7 +27,7 @@ def check(name: str, fn) -> bool:
 
 
 def main() -> int:
-    print("baryon.ai environment validation (Phase 0.4)\n")
+    print("laeria.ai environment validation (Phase 0.4)\n")
 
     hard_results = []
     soft_results = []

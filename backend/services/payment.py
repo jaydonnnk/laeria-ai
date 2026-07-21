@@ -253,8 +253,8 @@ def payment_required_body(requirements, resource_path: str) -> dict:
 
     resource = ResourceInfo(
         url=resource_path,
-        description="baryon.ai paid resource",
-        service_name="baryon.ai demo vendor",
+        description="laeria.ai paid resource",
+        service_name="laeria.ai demo vendor",
     )
     pr = _resource_server().create_payment_required_response(requirements, resource)
     return json.loads(pr.model_dump_json(by_alias=True))

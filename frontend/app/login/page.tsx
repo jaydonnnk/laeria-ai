@@ -24,7 +24,7 @@ export default function Page() {
 
   return (
     <main style={{ maxWidth: 380, margin: "120px auto", padding: "0 24px" }}>
-      <h1>baryon.ai</h1>
+      <h1>laeria.ai</h1>
       <p style={{ color: "#555" }}>Sign in with your owner account.</p>
       <form onSubmit={signIn} style={{ display: "grid", gap: 10 }}>
         <input
