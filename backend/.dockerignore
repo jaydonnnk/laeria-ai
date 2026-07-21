@@ -1,0 +1,16 @@
+# Keep the image small and secrets out.
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+usage_stats.json
+worker.log
+screenshots/
+tests/
+# SAC stubs are Windows-local; Linux uses the real wheels.
+../infra/bitarray_stub/
+../infra/ckzg_stub/
+../infra/regex_stub/
