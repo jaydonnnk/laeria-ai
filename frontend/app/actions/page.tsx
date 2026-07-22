@@ -1,14 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, BazaarService, Mandate, PayAction, UsageStats } from "../../lib/api";
+import { Button } from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { Stat } from "../../components/ui/Stat";
+import { Banner, SectionHeader } from "../../components/ui/Banner";
+import { Input, Field } from "../../components/ui/Input";
+import { shake } from "../../lib/motion";
 
-const STATUS_COLOR: Record<string, string> = {
-  executed: "#1a7f37",
-  approved: "#0969da",
-  pending_approval: "#9a6700",
-  cancelled: "#888",
-  failed: "#cf222e",
+const STATUS_TONE: Record<string, "success" | "info" | "warning" | "neutral" | "danger"> = {
+  executed: "success",
+  approved: "info",
+  pending_approval: "warning",
+  cancelled: "neutral",
+  failed: "danger",
 };
 
 const DEFAULT_MANDATE: Mandate = {
@@ -20,13 +27,14 @@ const DEFAULT_MANDATE: Mandate = {
   autonomous_actions_enabled: false,
 };
 
-export default function Page() {
+export default function ActionsPage() {
   const [mandate, setMandate] = useState<Mandate>(DEFAULT_MANDATE);
   const [actions, setActions] = useState<PayAction[]>([]);
   const [usage, setUsage] = useState<UsageStats | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const historyRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -73,7 +81,12 @@ export default function Page() {
         category: "research",
         description: "x402 demo: buy the paywalled deep report",
       });
-      setInfo(res.outcome);
+      if (res.action.status === "cancelled") {
+        shake(historyRef.current);
+        setError(String(res.action.metadata?.mandate_violation ?? res.outcome));
+      } else {
+        setInfo(res.outcome);
+      }
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -101,170 +114,203 @@ export default function Page() {
   const pending = actions.filter((a) => a.status === "pending_approval");
 
   return (
-    <main style={{ maxWidth: 860, margin: "60px auto", padding: "0 24px" }}>
-      <a href="/">&larr; back</a>
-      <h1>Actions &amp; mandate</h1>
-      <p style={{ color: "#555" }}>
-        The standing rules your agent must operate within (AP2-style
-        co-signed mandate), and every payment action it has taken or wants to
-        take. Payments run on real x402 — USDC on Base Sepolia testnet.
-      </p>
-
-      {error && <p style={{ color: "#cf222e" }}>{error}</p>}
-      {info && <p style={{ color: "#1a7f37" }}>{info}</p>}
-
-      <section style={{ marginBottom: 28 }}>
-        <h2>Mandate</h2>
-        <form onSubmit={saveMandate} style={{ display: "grid", gap: 10, maxWidth: 480 }}>
-          <label style={labelStyle}>
-            <input
-              type="checkbox"
-              checked={mandate.autonomous_actions_enabled}
-              onChange={(e) =>
-                setMandate({ ...mandate, autonomous_actions_enabled: e.target.checked })
-              }
-            />{" "}
-            Allow autonomous execution (within the limits below)
-          </label>
-          <p style={{ margin: 0, color: "#9a6700", fontSize: 13 }}>
-            Note: 0 in any limit field means <strong>no cap</strong>, not zero
-            dollars. The autonomous toggle above is the master switch.
-          </p>
-          <label style={labelStyle}>
-            Max per transaction ($)
-            <input
-              type="number" step="0.01" min="0"
-              value={mandate.max_per_transaction}
-              onChange={(e) =>
-                setMandate({ ...mandate, max_per_transaction: Number(e.target.value) })
-              }
-              style={inputStyle}
-            />
-          </label>
-          <label style={labelStyle}>
-            Max per month ($)
-            <input
-              type="number" step="0.01" min="0"
-              value={mandate.max_per_month}
-              onChange={(e) => setMandate({ ...mandate, max_per_month: Number(e.target.value) })}
-              style={inputStyle}
-            />
-          </label>
-          <label style={labelStyle}>
-            Ask me first above ($)
-            <input
-              type="number" step="0.01" min="0"
-              value={mandate.require_confirmation_above}
-              onChange={(e) =>
-                setMandate({ ...mandate, require_confirmation_above: Number(e.target.value) })
-              }
-              style={inputStyle}
-            />
-          </label>
-          <button type="submit" disabled={busy} style={buttonStyle}>
-            Save mandate
-          </button>
-        </form>
-      </section>
-
-      {pending.length > 0 && (
-        <section style={{ marginBottom: 28 }}>
-          <h2>Awaiting your approval</h2>
-          <div style={{ display: "grid", gap: 12 }}>
-            {pending.map((a) => (
-              <div key={a.id} style={{ ...cardStyle, borderLeft: "4px solid #9a6700" }}>
-                <p style={{ margin: "0 0 6px" }}>
-                  <strong>{a.type}</strong> — ${a.amount_usd.toFixed(2)} —{" "}
-                  {String(a.metadata?.description ?? a.target)}
-                </p>
-                <p style={{ margin: "0 0 10px", color: "#888", fontSize: 13 }}>
-                  {String(a.metadata?.reason ?? "")} · window expires 10 min after proposal
-                </p>
-                <span style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => decide(a.id, true)} disabled={busy} style={buttonStyle}>
-                    Approve &amp; execute
-                  </button>
-                  <button onClick={() => decide(a.id, false)} disabled={busy} style={smallButtonStyle}>
-                    Reject
-                  </button>
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section style={{ marginBottom: 28 }}>
-        <h2>Test the rail</h2>
-        <p style={{ color: "#555", fontSize: 14 }}>
-          Proposes buying the $0.01 paywalled report from the demo vendor. If
-          the mandate clears it, the agent pays autonomously with real x402;
-          otherwise it lands above for your approval.
+    <main className="max-w-[1100px] mx-auto px-6 py-10 md:py-14">
+      <div className="mb-8">
+        <div className="eyebrow mb-3">Mandate &amp; payments</div>
+        <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
+          Actions &amp; mandate
+        </h1>
+        <p className="mt-3 text-ink-muted max-w-[46rem]">
+          The standing rules your agent operates within — a co-signed spending
+          mandate — and every payment it has taken or wants to take. Real x402,
+          USDC on Base Sepolia.
         </p>
-        <button onClick={testPurchase} disabled={busy} style={buttonStyle}>
-          {busy ? "Working…" : "Propose $0.01 test purchase"}
-        </button>
-      </section>
+      </div>
 
-      <BazaarSection
-        onProposed={async (outcome) => {
-          setInfo(outcome);
-          await refresh();
-        }}
-        onError={setError}
-      />
+      {error && <Banner tone="error" className="mb-3">{error}</Banner>}
+      {info && <Banner tone="success" className="mb-3">{info}</Banner>}
 
-      {usage && (
-        <section style={{ marginBottom: 28 }}>
-          <h2>Agent resource usage</h2>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {[
-              ["Reddit requests", usage.reddit_requests.toLocaleString()],
-              ["LLM calls", usage.llm_calls.toLocaleString()],
-              ["LLM tokens", usage.llm_tokens.toLocaleString()],
-              ["Embedding batches", usage.embed_calls.toLocaleString()],
-              ["Paid via x402", `$${usage.paid_usd.toFixed(3)}`],
-            ].map(([label, value]) => (
-              <div key={label} style={{ ...cardStyle, padding: "10px 16px", minWidth: 140 }}>
-                <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
-                <div style={{ color: "#888", fontSize: 12 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <section>
-        <h2>History</h2>
-        <div style={{ display: "grid", gap: 8 }}>
-          {actions.length === 0 && <p style={{ color: "#888" }}>No actions yet.</p>}
-          {actions.map((a) => (
-            <div key={a.id} style={{ ...cardStyle, padding: "10px 14px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 14 }}>
-                <span>
-                  <strong style={{ color: STATUS_COLOR[a.status] }}>{a.status}</strong>
-                  {" · "}{a.type} · ${a.amount_usd.toFixed(2)}
-                  {" · "}{String(a.metadata?.description ?? "")}
-                </span>
-                <span style={{ color: "#888", fontSize: 12 }}>
-                  {new Date(a.created_at).toLocaleString()}
-                </span>
-              </div>
-              {typeof a.metadata?.error === "string" && (
-                <p style={{ margin: "4px 0 0", color: "#cf222e", fontSize: 13 }}>
-                  {a.metadata.error}
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-10">
+        <div>
+          {/* Mandate form */}
+          <section className="mb-10">
+            <SectionHeader title="Mandate" aside="the guardrail" />
+            <Card className="p-6">
+              <form onSubmit={saveMandate} className="grid gap-5 max-w-[440px]">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={mandate.autonomous_actions_enabled}
+                    onChange={(e) =>
+                      setMandate({ ...mandate, autonomous_actions_enabled: e.target.checked })
+                    }
+                    className="mt-1 accent-[var(--color-accent)] w-4 h-4"
+                  />
+                  <span className="text-sm text-ink">
+                    Allow autonomous execution
+                    <span className="block text-ink-subtle text-[13px] mt-0.5">
+                      within the caps below · the master switch
+                    </span>
+                  </span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <CapField
+                    label="Per transaction"
+                    value={mandate.max_per_transaction}
+                    onChange={(v) => setMandate({ ...mandate, max_per_transaction: v })}
+                  />
+                  <CapField
+                    label="Per month"
+                    value={mandate.max_per_month}
+                    onChange={(v) => setMandate({ ...mandate, max_per_month: v })}
+                  />
+                  <CapField
+                    label="Ask first above"
+                    value={mandate.require_confirmation_above}
+                    onChange={(v) => setMandate({ ...mandate, require_confirmation_above: v })}
+                  />
+                </div>
+                <p className="text-[13px] text-warning">
+                  <b>0</b> in any field means <b>no cap</b>, not zero dollars.
                 </p>
-              )}
-              {typeof a.metadata?.mandate_violation === "string" && (
-                <p style={{ margin: "4px 0 0", color: "#cf222e", fontSize: 13 }}>
-                  refused: {a.metadata.mandate_violation}
-                </p>
-              )}
+                <Button type="submit" disabled={busy} className="w-fit">
+                  Save mandate
+                </Button>
+              </form>
+            </Card>
+          </section>
+
+          {/* Pending approvals */}
+          {pending.length > 0 && (
+            <section className="mb-10">
+              <SectionHeader title="Awaiting your approval" aside={`${pending.length} pending`} />
+              <div className="grid gap-3">
+                {pending.map((a) => (
+                  <Card key={a.id} className="p-5 border-l-2 border-l-warning">
+                    <div className="flex items-center gap-2 flex-wrap mb-1">
+                      <Badge tone="warning">{a.type}</Badge>
+                      <span className="tnum text-ink font-medium">${a.amount_usd.toFixed(2)}</span>
+                      <span className="text-sm text-ink-muted">
+                        {String(a.metadata?.description ?? a.target)}
+                      </span>
+                    </div>
+                    <p className="text-[13px] text-ink-subtle mb-3">
+                      {String(a.metadata?.reason ?? "")} · window expires 10 min after proposal
+                    </p>
+                    <div className="flex gap-2">
+                      <Button onClick={() => decide(a.id, true)} disabled={busy}>
+                        Approve &amp; execute
+                      </Button>
+                      <Button variant="secondary" onClick={() => decide(a.id, false)} disabled={busy}>
+                        Reject
+                      </Button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Test rail */}
+          <section className="mb-10">
+            <SectionHeader title="Test the rail" aside="real x402 · $0.01" />
+            <Card className="p-5">
+              <p className="text-sm text-ink-muted mb-4 max-w-[42rem]">
+                Proposes buying the $0.01 paywalled report from the demo vendor.
+                If the mandate clears it, the agent pays autonomously; otherwise
+                it lands above for your approval.
+              </p>
+              <Button variant="secondary" onClick={testPurchase} disabled={busy}>
+                {busy ? "Working…" : "Propose $0.01 test purchase"}
+              </Button>
+            </Card>
+          </section>
+
+          <BazaarSection
+            onProposed={async (outcome) => {
+              setInfo(outcome);
+              await refresh();
+            }}
+            onError={setError}
+          />
+
+          {/* History */}
+          <section ref={historyRef}>
+            <SectionHeader title="History" aside="every action, every rail" />
+            <div className="grid gap-2">
+              {actions.length === 0 && <p className="text-ink-subtle text-sm">No actions yet.</p>}
+              {actions.map((a) => (
+                <Card key={a.id} className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge tone={STATUS_TONE[a.status] ?? "neutral"}>
+                        {a.status.replace("_", " ")}
+                      </Badge>
+                      <span className="text-sm text-ink-muted">{a.type}</span>
+                      <span className="tnum text-sm text-ink">${a.amount_usd.toFixed(2)}</span>
+                      <span className="text-sm text-ink-subtle">
+                        {String(a.metadata?.description ?? "")}
+                      </span>
+                    </div>
+                    <span className="tnum text-xs text-ink-subtle whitespace-nowrap">
+                      {new Date(a.created_at).toLocaleString()}
+                    </span>
+                  </div>
+                  {typeof a.metadata?.mandate_violation === "string" && (
+                    <p className="mt-1.5 text-[13px] text-danger">
+                      refused: {a.metadata.mandate_violation}
+                    </p>
+                  )}
+                  {typeof a.metadata?.error === "string" && (
+                    <p className="mt-1.5 text-[13px] text-danger">{a.metadata.error}</p>
+                  )}
+                </Card>
+              ))}
             </div>
-          ))}
+          </section>
         </div>
-      </section>
+
+        {/* Usage rail */}
+        <aside className="lg:sticky lg:top-20 lg:self-start">
+          <SectionHeader title="Agent usage" />
+          {usage ? (
+            <Card className="p-5 grid gap-5">
+              <Stat value={usage.reddit_requests} label="Reddit requests" decimals={0} />
+              <Stat value={usage.llm_calls} label="LLM calls" decimals={0} />
+              <Stat value={usage.llm_tokens} label="LLM tokens" decimals={0} />
+              <Stat value={usage.embed_calls} label="Embedding batches" decimals={0} />
+              <Stat value={usage.paid_usd} label="Paid via x402" prefix="$" decimals={3} />
+            </Card>
+          ) : (
+            <Card className="p-5 text-sm text-ink-subtle">Usage unavailable.</Card>
+          )}
+        </aside>
+      </div>
     </main>
+  );
+}
+
+function CapField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden">
+        <span className="px-2.5 text-ink-subtle text-sm border-r border-hairline">$</span>
+        <input
+          type="number" step="0.01" min="0"
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="tnum w-full px-2.5 py-2 text-sm bg-transparent outline-none"
+        />
+      </div>
+    </Field>
   );
 }
 
@@ -310,102 +356,60 @@ function BazaarSection({
   }
 
   return (
-    <section style={{ marginBottom: 28 }}>
-      <h2>Discover x402 services (Bazaar)</h2>
-      <p style={{ color: "#555", fontSize: 14 }}>
-        Real third-party services that accept agent payments — from
-        Coinbase&apos;s public index. Most run on Base <em>mainnet</em>: paying
-        them needs real USDC in the agent wallet (mandate caps apply).
+    <section className="mb-10">
+      <SectionHeader title="Discover x402 services" aside="Coinbase Bazaar index" />
+      <p className="text-sm text-ink-muted mb-4 max-w-[46rem]">
+        Real third-party services that accept agent payments. Most run on Base{" "}
+        <em>mainnet</em> — paying them needs real USDC in the agent wallet
+        (mandate caps still apply).
       </p>
-      <form onSubmit={search} style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        <input
+      <form onSubmit={search} className="flex gap-2 mb-4 max-w-[440px]">
+        <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder='Filter, e.g. "chain", "search", "mail"'
-          style={{ ...inputStyle, maxWidth: 320 }}
         />
-        <button type="submit" disabled={searching} style={smallButtonStyle}>
-          {searching ? "Searching…" : "Browse index"}
-        </button>
+        <Button type="submit" variant="secondary" disabled={searching} className="shrink-0">
+          {searching ? "Searching…" : "Browse"}
+        </Button>
       </form>
       {results && results.length === 0 && (
-        <p style={{ color: "#888" }}>No listings matched.</p>
+        <p className="text-ink-subtle text-sm">No listings matched.</p>
       )}
       {results && results.length > 0 && (
-        <div style={{ display: "grid", gap: 8 }}>
+        <div className="grid gap-2">
           {results.map((s) => (
-            <div key={s.resource} style={{ ...cardStyle, padding: "10px 14px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-                <span style={{ fontSize: 14, wordBreak: "break-all" }}>
-                  {s.resource}
-                  <span style={{ color: "#888", fontSize: 12 }}>
-                    {" "}· ${s.amount_usd} · {s.network}
-                  </span>
-                </span>
+            <Card key={s.resource} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-mono text-[13px] text-ink break-all">{s.resource}</div>
+                  <div className="tnum text-xs text-ink-subtle mt-0.5">
+                    ${s.amount_usd} · {s.network}
+                  </div>
+                  {s.description && (
+                    <p className="text-[13px] text-ink-muted mt-1">{s.description}</p>
+                  )}
+                </div>
                 {s.payable_by_agent ? (
-                  <button
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => pay(s)}
                     disabled={paying !== null}
-                    style={smallButtonStyle}
+                    className="shrink-0"
                   >
                     {paying === s.resource ? "Paying…" : "Pay via agent"}
-                  </button>
+                  </Button>
                 ) : (
-                  <span style={{ color: "#aaa", fontSize: 12, whiteSpace: "nowrap" }}>
+                  <span className="text-xs text-ink-subtle whitespace-nowrap shrink-0">
                     not agent-payable
                   </span>
                 )}
               </div>
-              {s.description && (
-                <p style={{ margin: "4px 0 0", color: "#555", fontSize: 13 }}>{s.description}</p>
-              )}
-            </div>
+            </Card>
           ))}
         </div>
       )}
     </section>
   );
 }
-
-const cardStyle: React.CSSProperties = {
-  border: "1px solid #e1e4e8",
-  borderRadius: 10,
-  padding: "14px 18px",
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 14,
-  color: "#333",
-  display: "grid",
-  gap: 4,
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "8px 10px",
-  fontSize: 14,
-  border: "1px solid #ccc",
-  borderRadius: 8,
-  fontFamily: "inherit",
-  maxWidth: 200,
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "9px 14px",
-  fontSize: 14,
-  fontWeight: 600,
-  borderRadius: 8,
-  border: "none",
-  background: "#1f2328",
-  color: "#fff",
-  cursor: "pointer",
-  width: "fit-content",
-};
-
-const smallButtonStyle: React.CSSProperties = {
-  padding: "9px 14px",
-  fontSize: 14,
-  borderRadius: 8,
-  border: "1px solid #ccc",
-  background: "#fff",
-  cursor: "pointer",
-};

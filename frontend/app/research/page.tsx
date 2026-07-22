@@ -3,14 +3,13 @@
 import { useState } from "react";
 import { api, OutcomeSummary } from "../../lib/api";
 import { Sources } from "../../components/Sources";
+import { Button } from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { Banner } from "../../components/ui/Banner";
+import { Input, Textarea, Field } from "../../components/ui/Input";
 
-const CONFIDENCE_COLOR: Record<string, string> = {
-  high: "#1a7f37",
-  moderate: "#9a6700",
-  low: "#cf222e",
-};
-
-export default function Page() {
+export default function ResearchPage() {
   const [decision, setDecision] = useState("");
   const [context, setContext] = useState("");
   const [loading, setLoading] = useState(false);
@@ -33,48 +32,52 @@ export default function Page() {
   }
 
   return (
-    <main style={{ maxWidth: 720, margin: "60px auto", padding: "0 24px" }}>
-      <a href="/">&larr; back</a>
-      <h1>Retrospective mining</h1>
-      <p style={{ color: "#555" }}>
-        Describe a decision you&apos;re about to make. The agent hunts update
-        posts — real people who made the same call and came back to report how
-        it went. Not opinions. Outcomes.
-      </p>
+    <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">
+      <div className="mb-8">
+        <div className="eyebrow mb-3">Mode 1 · how it turned out</div>
+        <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
+          Retrospective mining
+        </h1>
+        <p className="mt-3 text-ink-muted">
+          Describe a decision you&apos;re about to make. The agent hunts update
+          posts — real people who made the same call and came back to report.
+          Not opinions. Outcomes.
+        </p>
+      </div>
 
-      <form onSubmit={run} style={{ display: "grid", gap: 12 }}>
-        <textarea
-          value={decision}
-          onChange={(e) => setDecision(e.target.value)}
-          placeholder='e.g. "getting LASIK eye surgery" or "dropping out of uni to work full-time"'
-          rows={2}
-          style={inputStyle}
-          required
-          minLength={3}
-        />
-        <input
-          value={context}
-          onChange={(e) => setContext(e.target.value)}
-          placeholder="Optional context about your situation"
-          style={inputStyle}
-        />
-        <button type="submit" disabled={loading || !decision.trim()} style={buttonStyle}>
-          {loading ? "Mining update posts…" : "Find outcomes"}
-        </button>
-      </form>
+      <Card className="p-6 mb-8">
+        <form onSubmit={run} className="grid gap-4">
+          <Field label="The decision">
+            <Textarea
+              value={decision}
+              onChange={(e) => setDecision(e.target.value)}
+              placeholder='e.g. "getting LASIK eye surgery" or "dropping out to work full-time"'
+              rows={2}
+              required
+              minLength={3}
+            />
+          </Field>
+          <Field label="Context (optional)">
+            <Input
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder="About your situation"
+            />
+          </Field>
+          <Button type="submit" disabled={loading || !decision.trim()} className="w-fit">
+            {loading ? "Mining update posts…" : "Find outcomes"}
+          </Button>
+        </form>
+      </Card>
 
       {loading && (
-        <p style={{ color: "#888", marginTop: 24 }}>
-          Hunting retrospective posts across Reddit — this is the slowest
-          research mode, expect 2–4 minutes. The agent is searching outcome
-          phrasings, classifying which posts are genuine reports, and reading
-          the strongest ones.
-        </p>
+        <Banner tone="info" className="mb-6">
+          Hunting retrospective posts across Reddit — the slowest mode, 2–4
+          minutes. Searching outcome phrasings, classifying genuine reports,
+          reading the strongest.
+        </Banner>
       )}
-
-      {error && (
-        <p style={{ color: "#cf222e", marginTop: 24 }}>Research failed: {error}</p>
-      )}
+      {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}
 
       {summary && <OutcomesCard s={summary} />}
     </main>
@@ -84,71 +87,71 @@ export default function Page() {
 function OutcomesCard({ s }: { s: OutcomeSummary }) {
   const pctFmt = (x: number) => `${Math.round(x * 100)}%`;
   return (
-    <div style={{ marginTop: 32, display: "grid", gap: 20 }}>
+    <div className="grid gap-4">
       {s.thin_coverage && (
-        <div style={{ ...sectionStyle, background: "#fff8f0", borderColor: "#d4a72c" }}>
-          <strong>Limited data.</strong> Fewer than 5 genuine outcome reports
-          were found for this decision. What follows is the honest best from a
-          thin sample — treat it as anecdote, not consensus.
-        </div>
+        <Banner tone="info">
+          <b>Limited data.</b> Fewer than 5 genuine outcome reports were found.
+          What follows is the honest best from a thin sample — anecdote, not
+          consensus.
+        </Banner>
       )}
 
-      <div style={sectionStyle}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <h2 style={{ margin: 0 }}>
-            {s.retrospective_count} outcome report
-            {s.retrospective_count === 1 ? "" : "s"} found · {s.threads_read} read
-            in full
+      <Card className="p-6">
+        <div className="flex items-center justify-between gap-4 mb-4">
+          <h2 className="text-lg font-semibold">
+            <span className="tnum">{s.retrospective_count}</span> outcome report
+            {s.retrospective_count === 1 ? "" : "s"} ·{" "}
+            <span className="tnum">{s.threads_read}</span> read in full
           </h2>
-          <span
-            style={{
-              color: CONFIDENCE_COLOR[s.confidence] ?? "#555",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              fontSize: 13,
-            }}
-          >
-            {s.confidence} confidence
-          </span>
+          <Badge status={s.confidence}>{s.confidence} confidence</Badge>
         </div>
 
-        <div style={{ display: "flex", gap: 0, marginTop: 16, borderRadius: 6, overflow: "hidden", height: 28 }}>
+        <div className="flex rounded-[--radius-sm] overflow-hidden h-7 mb-3">
           {s.pct_positive > 0 && (
-            <div style={{ ...barStyle, flex: s.pct_positive, background: "#1a7f37" }}>
+            <div
+              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-success min-w-0"
+              style={{ flex: s.pct_positive }}
+            >
               {pctFmt(s.pct_positive)}
             </div>
           )}
           {s.pct_mixed > 0 && (
-            <div style={{ ...barStyle, flex: s.pct_mixed, background: "#9a6700" }}>
+            <div
+              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-warning min-w-0"
+              style={{ flex: s.pct_mixed }}
+            >
               {pctFmt(s.pct_mixed)}
             </div>
           )}
           {s.pct_negative > 0 && (
-            <div style={{ ...barStyle, flex: s.pct_negative, background: "#cf222e" }}>
+            <div
+              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-danger min-w-0"
+              style={{ flex: s.pct_negative }}
+            >
               {pctFmt(s.pct_negative)}
             </div>
           )}
         </div>
-        <p style={{ color: "#888", fontSize: 13, marginBottom: 0 }}>
-          <span style={{ color: "#1a7f37" }}>■</span> glad they did it&ensp;
-          <span style={{ color: "#9a6700" }}>■</span> mixed&ensp;
-          <span style={{ color: "#cf222e" }}>■</span> regret it
-          <span style={{ display: "block", marginTop: 4 }}>
+        <p className="text-[13px] text-ink-subtle">
+          <span className="text-success">■</span> glad they did it&ensp;
+          <span className="text-warning">■</span> mixed&ensp;
+          <span className="text-danger">■</span> regret it
+          <span className="block mt-1">
             Split reflects the {s.threads_read} reports read in full, not all{" "}
             {s.retrospective_count} found.
           </span>
         </p>
-      </div>
+      </Card>
 
-      <ListSection title="What people are glad about" items={s.common_positives} accent="#1a7f37" />
-      <ListSection title="Common regrets" items={s.common_regrets} accent="#cf222e" />
+      <ListSection title="What people are glad about" items={s.common_positives} tone="success" />
+      <ListSection title="Common regrets" items={s.common_regrets} tone="danger" />
       <ListSection title="Surprising findings" items={s.surprising_findings} />
 
       {s.sample_bias && (
-        <div style={{ ...sectionStyle, background: "#f6f8fa" }}>
-          <h3 style={{ marginTop: 0 }}>Who actually posts updates</h3>
-          <p style={{ margin: 0, color: "#555" }}>{s.sample_bias}</p>
-        </div>
+        <Card className="p-5 bg-surface-2">
+          <div className="eyebrow mb-2">Who actually posts updates</div>
+          <p className="text-sm text-ink-muted">{s.sample_bias}</p>
+        </Card>
       )}
 
       <Sources sources={s.sources} />
@@ -159,58 +162,26 @@ function OutcomesCard({ s }: { s: OutcomeSummary }) {
 function ListSection({
   title,
   items,
-  accent,
+  tone,
 }: {
   title: string;
   items: string[];
-  accent?: string;
+  tone?: "success" | "danger";
 }) {
   if (!items?.length) return null;
+  const dot =
+    tone === "success" ? "bg-success" : tone === "danger" ? "bg-danger" : "bg-ink-subtle";
   return (
-    <div style={sectionStyle}>
-      <h3 style={{ marginTop: 0, color: accent }}>{title}</h3>
-      <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
+    <Card className="p-5">
+      <h3 className="font-semibold text-ink mb-3">{title}</h3>
+      <ul className="grid gap-2">
         {items.map((item, i) => (
-          <li key={i} style={{ lineHeight: 1.45 }}>
+          <li key={i} className="flex gap-2.5 text-sm leading-snug text-ink-muted">
+            <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
             {item}
           </li>
         ))}
       </ul>
-    </div>
+    </Card>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  fontSize: 15,
-  border: "1px solid #ccc",
-  borderRadius: 8,
-  fontFamily: "inherit",
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "10px 16px",
-  fontSize: 15,
-  fontWeight: 600,
-  borderRadius: 8,
-  border: "none",
-  background: "#1f2328",
-  color: "#fff",
-  cursor: "pointer",
-};
-
-const sectionStyle: React.CSSProperties = {
-  border: "1px solid #e1e4e8",
-  borderRadius: 10,
-  padding: "16px 20px",
-};
-
-const barStyle: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: "#fff",
-  fontSize: 12,
-  fontWeight: 600,
-  minWidth: 0,
-};

@@ -3,14 +3,13 @@
 import { useState } from "react";
 import { api, ResearchBrief } from "../../lib/api";
 import { Sources } from "../../components/Sources";
+import { Button } from "../../components/ui/Button";
+import { Card } from "../../components/ui/Card";
+import { Badge } from "../../components/ui/Badge";
+import { Banner } from "../../components/ui/Banner";
+import { Input, Textarea, Field } from "../../components/ui/Input";
 
-const CONFIDENCE_COLOR: Record<string, string> = {
-  high: "#1a7f37",
-  moderate: "#9a6700",
-  low: "#cf222e",
-};
-
-export default function Page() {
+export default function DecisionPage() {
   const [query, setQuery] = useState("");
   const [context, setContext] = useState("");
   const [loading, setLoading] = useState(false);
@@ -53,73 +52,65 @@ export default function Page() {
   }
 
   return (
-    <main style={{ maxWidth: 720, margin: "60px auto", padding: "0 24px" }}>
-      <a href="/">&larr; back</a>
-      <h1>Decision synthesis</h1>
-      <p style={{ color: "#555" }}>
-        Describe a purchase or decision. The agent reads real Reddit threads
-        across relevant communities and returns the honest consensus — not
-        marketing, not SEO spam.
-      </p>
+    <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">
+      <div className="mb-8">
+        <div className="eyebrow mb-3">Mode 2 · decide what to buy</div>
+        <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
+          Decision synthesis
+        </h1>
+        <p className="mt-3 text-ink-muted">
+          Describe a purchase. The agent reads real Reddit threads across
+          relevant communities and returns the honest consensus — not marketing,
+          not SEO spam.
+        </p>
+      </div>
 
-      <form onSubmit={run} style={{ display: "grid", gap: 12 }}>
-        <textarea
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder='e.g. "best budget mechanical keyboard for programming under $100"'
-          rows={2}
-          style={inputStyle}
-          required
-          minLength={3}
-        />
-        <input
-          value={context}
-          onChange={(e) => setContext(e.target.value)}
-          placeholder="Optional context — budget, use case, constraints"
-          style={inputStyle}
-        />
-        <button type="submit" disabled={loading || !query.trim()} style={buttonStyle}>
-          {loading ? "Researching…" : "Research"}
-        </button>
-      </form>
+      <Card className="p-6 mb-8">
+        <form onSubmit={run} className="grid gap-4">
+          <Field label="What are you deciding?">
+            <Textarea
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='e.g. "best budget mechanical keyboard for programming under $100"'
+              rows={2}
+              required
+              minLength={3}
+            />
+          </Field>
+          <Field label="Context (optional)">
+            <Input
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder="Budget, use case, constraints"
+            />
+          </Field>
+          <Button type="submit" disabled={loading || !query.trim()} className="w-fit">
+            {loading ? "Researching…" : "Research"}
+          </Button>
+        </form>
+      </Card>
 
       {loading && (
-        <p style={{ color: "#888", marginTop: 24 }}>
-          Reading Reddit threads — this takes 30–90 seconds. The agent is
-          identifying communities, pulling threads, and synthesising.
-        </p>
+        <Banner tone="info" className="mb-6">
+          Reading Reddit threads — 30–90 seconds. Identifying communities, pulling
+          threads, synthesising.
+        </Banner>
       )}
-
-      {error && (
-        <p style={{ color: "#cf222e", marginTop: 24 }}>
-          Research failed: {error}
-        </p>
-      )}
+      {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}
 
       {brief && <BriefCard brief={brief} />}
 
       {brief && brief.consensus_pick && brief.confidence !== "low" && (
-        <div
-          style={{
-            marginTop: 20,
-            border: "1px solid #1a7f37",
-            borderRadius: 10,
-            padding: "16px 20px",
-            background: "#f0fff4",
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Consensus is strong — let the agent act</h3>
-          <p style={{ color: "#555", fontSize: 14 }}>
+        <Card className="mt-6 p-6 border-accent/30 bg-accent-soft">
+          <h3 className="font-semibold text-ink mb-1">Consensus is strong — let the agent act</h3>
+          <p className="text-sm text-ink-muted mb-4">
             Proposes a purchase through the x402 rail under your mandate.
-            (Targets the demo vendor until real x402 merchants exist.)
           </p>
-          <button onClick={executePurchase} disabled={acting} style={buttonStyle}>
+          <Button onClick={executePurchase} disabled={acting}>
             {acting ? "Proposing…" : "Execute purchase via agent"}
-          </button>
-          {actOutcome && (
-            <p style={{ marginBottom: 0, fontSize: 14, color: "#1a7f37" }}>{actOutcome}</p>
-          )}
-        </div>
+          </Button>
+          {actOutcome && <p className="mt-3 text-sm text-success">{actOutcome}</p>}
+        </Card>
       )}
     </main>
   );
@@ -128,42 +119,33 @@ export default function Page() {
 function BriefCard({ brief }: { brief: ResearchBrief }) {
   const sq = brief.signal_quality;
   return (
-    <div style={{ marginTop: 32, display: "grid", gap: 20 }}>
-      <div style={sectionStyle}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-          <h2 style={{ margin: 0 }}>Verdict</h2>
-          <span
-            style={{
-              color: CONFIDENCE_COLOR[brief.confidence] ?? "#555",
-              fontWeight: 600,
-              textTransform: "uppercase",
-              fontSize: 13,
-            }}
-          >
-            {brief.confidence} confidence
-          </span>
+    <div className="grid gap-4">
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">Verdict</h2>
+          <Badge status={brief.confidence}>{brief.confidence} confidence</Badge>
         </div>
-        <p style={{ fontSize: 17, lineHeight: 1.5 }}>
+        <p className="text-[17px] leading-relaxed text-ink">
           {brief.consensus_pick || "No clear community consensus found."}
         </p>
-        <p style={{ color: "#888", fontSize: 13, margin: 0 }}>
-          Based on {sq.thread_count} threads across{" "}
+        <p className="text-[13px] text-ink-subtle mt-2">
+          Based on <span className="tnum">{sq.thread_count}</span> threads across{" "}
           {sq.subreddits_checked.map((s) => `r/${s}`).join(", ")}
           {sq.date_range ? ` · ${sq.date_range}` : ""}
         </p>
-      </div>
+      </Card>
 
-      <ListSection title="What users praise" items={brief.strengths} accent="#1a7f37" />
-      <ListSection title="Red flags" items={brief.red_flags} accent="#cf222e" />
+      <ListSection title="What users praise" items={brief.strengths} tone="success" />
+      <ListSection title="Red flags" items={brief.red_flags} tone="danger" />
       <ListSection title="Known failure modes" items={brief.failure_modes} />
       <ListSection title="What review sites miss" items={brief.what_reviewers_miss} />
       <ListSection title="Alternatives the community mentions" items={brief.alternatives} />
 
       {sq.bias_notes && (
-        <div style={{ ...sectionStyle, background: "#fff8f0" }}>
-          <h3 style={{ marginTop: 0 }}>Signal quality note</h3>
-          <p style={{ margin: 0, color: "#555" }}>{sq.bias_notes}</p>
-        </div>
+        <Card className="p-5 bg-warning-soft border-warning/20">
+          <div className="eyebrow mb-2">Signal quality note</div>
+          <p className="text-sm text-ink-muted">{sq.bias_notes}</p>
+        </Card>
       )}
 
       <Sources sources={brief.sources} />
@@ -174,48 +156,26 @@ function BriefCard({ brief }: { brief: ResearchBrief }) {
 function ListSection({
   title,
   items,
-  accent,
+  tone,
 }: {
   title: string;
   items: string[];
-  accent?: string;
+  tone?: "success" | "danger";
 }) {
   if (!items?.length) return null;
+  const dot =
+    tone === "success" ? "bg-success" : tone === "danger" ? "bg-danger" : "bg-ink-subtle";
   return (
-    <div style={sectionStyle}>
-      <h3 style={{ marginTop: 0, color: accent }}>{title}</h3>
-      <ul style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 6 }}>
+    <Card className="p-5">
+      <h3 className="font-semibold text-ink mb-3">{title}</h3>
+      <ul className="grid gap-2">
         {items.map((item, i) => (
-          <li key={i} style={{ lineHeight: 1.45 }}>
+          <li key={i} className="flex gap-2.5 text-sm leading-snug text-ink-muted">
+            <span className={`mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
             {item}
           </li>
         ))}
       </ul>
-    </div>
+    </Card>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  fontSize: 15,
-  border: "1px solid #ccc",
-  borderRadius: 8,
-  fontFamily: "inherit",
-};
-
-const buttonStyle: React.CSSProperties = {
-  padding: "10px 16px",
-  fontSize: 15,
-  fontWeight: 600,
-  borderRadius: 8,
-  border: "none",
-  background: "#1f2328",
-  color: "#fff",
-  cursor: "pointer",
-};
-
-const sectionStyle: React.CSSProperties = {
-  border: "1px solid #e1e4e8",
-  borderRadius: 10,
-  padding: "16px 20px",
-};

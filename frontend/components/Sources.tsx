@@ -4,28 +4,27 @@ import { SourceThread } from "../lib/api";
 export function Sources({ sources }: { sources: SourceThread[] }) {
   if (!sources?.length) return null;
   return (
-    <div
-      style={{
-        border: "1px solid #e1e4e8",
-        borderRadius: 10,
-        padding: "16px 20px",
-      }}
-    >
-      <h3 style={{ marginTop: 0 }}>Threads the agent read</h3>
-      <ol style={{ margin: 0, paddingLeft: 20, display: "grid", gap: 8 }}>
-        {sources.map((s) => (
-          <li key={s.id} style={{ lineHeight: 1.45 }}>
-            <a
-              href={s.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "#0969da", textDecoration: "none" }}
-            >
-              {s.title || s.url}
-            </a>
-            <span style={{ color: "#888", fontSize: 13 }}>
-              {" "}
-              — r/{s.subreddit} · {s.score} pts · {s.num_comments} comments
+    <div className="bg-surface border border-hairline rounded-[--radius-lg] p-5">
+      <div className="eyebrow mb-3">Threads the agent read</div>
+      <ol className="grid gap-2.5">
+        {sources.map((s, i) => (
+          <li key={s.id} className="flex gap-3 text-sm leading-snug">
+            <span className="tnum text-ink-subtle shrink-0">
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <span>
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-info hover:underline"
+              >
+                {s.title || s.url}
+              </a>
+              <span className="text-ink-subtle">
+                {" "}— r/{s.subreddit} · <span className="tnum">{s.score}</span> pts ·{" "}
+                <span className="tnum">{s.num_comments}</span> comments
+              </span>
             </span>
           </li>
         ))}
