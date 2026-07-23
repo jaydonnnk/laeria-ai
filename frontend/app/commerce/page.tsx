@@ -32,6 +32,7 @@ export default function CommercePage() {
   const [buying, setBuying] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [handedPick, setHandedPick] = useState<string | null>(null);
 
   // lifecycle state — lifted so the stepper reflects the whole flow
   const [agentFunded, setAgentFunded] = useState(false);
@@ -57,18 +58,34 @@ export default function CommercePage() {
     ];
   }, [agentFunded, products, verifications, cardCount, executedCount]);
 
-  async function search(e?: React.FormEvent) {
-    e?.preventDefault();
+  const runSearch = useCallback(async (term: string) => {
     setSearching(true);
     setError(null);
     try {
-      setProducts(await api.storeSearch(q, 12));
+      setProducts(await api.storeSearch(term, 12));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSearching(false);
     }
+  }, []);
+
+  async function search(e?: React.FormEvent) {
+    e?.preventDefault();
+    await runSearch(q);
   }
+
+  // Handed a pick from "What to buy" (/decision?…→ /commerce?q=…): prefill and
+  // search immediately so research → purchase is one continuous flow.
+  // Read from location rather than useSearchParams to avoid needing a Suspense
+  // boundary on this statically-prerendered client page.
+  useEffect(() => {
+    const handed = new URLSearchParams(window.location.search).get("q");
+    if (!handed) return;
+    setQ(handed);
+    setHandedPick(handed);
+    runSearch(handed);
+  }, [runSearch]);
 
   async function verify(p: StoreProduct) {
     setVerifying(p.handle);
@@ -144,6 +161,12 @@ export default function CommercePage() {
       {/* ---- Discover ---- */}
       <section className="mb-10">
         <SectionHeader n="02" title="Discover" aside="agent scans the live storefront" />
+        {handedPick && (
+          <Banner tone="info" className="mb-4">
+            Carried over from <b>What to buy</b> — searching the store for{" "}
+            <span className="font-mono">{handedPick}</span>.
+          </Banner>
+        )}
         <form onSubmit={search} className="flex gap-2 mb-5 max-w-[440px]">
           <Input
             value={q}

@@ -284,8 +284,8 @@ export default function Landing() {
         </div>
         <div className="reveal mt-10 grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
-            ["Decide", "Honest community consensus on a purchase — the pick, the red flags, the alternatives.", "/decision"],
-            ["Retrospect", "Update posts from people who made the same call and came back to report how it went.", "/research"],
+            ["What to buy", "Honest community consensus on a purchase — the pick, the red flags, the alternatives.", "/decision"],
+            ["How it went", "Update posts from people who made the same call and came back to report how it turned out.", "/research"],
             ["Monitor", "Watches what you own for a change in the signal — and can act within the mandate.", "/monitor"],
           ].map(([title, body, href]) => (
             <Link

@@ -34,9 +34,9 @@ export default function ResearchPage() {
   return (
     <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">
       <div className="mb-8">
-        <div className="eyebrow mb-3">Mode 1 · how it turned out</div>
+        <div className="eyebrow mb-3">Real outcomes</div>
         <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
-          Retrospective mining
+          How it went
         </h1>
         <p className="mt-3 text-ink-muted">
           Describe a decision you&apos;re about to make. The agent hunts update

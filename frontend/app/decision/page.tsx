@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { api, ResearchBrief } from "../../lib/api";
 import { Sources } from "../../components/Sources";
 import { Button } from "../../components/ui/Button";
@@ -9,7 +10,18 @@ import { Badge } from "../../components/ui/Badge";
 import { Banner } from "../../components/ui/Banner";
 import { Input, Textarea, Field } from "../../components/ui/Input";
 
+/** Turn a consensus sentence into a short, searchable store query. */
+function searchSeed(pick: string): string {
+  return pick
+    .replace(/[^\w\s-]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 5)
+    .join(" ");
+}
+
 export default function DecisionPage() {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [context, setContext] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,9 +66,9 @@ export default function DecisionPage() {
   return (
     <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">
       <div className="mb-8">
-        <div className="eyebrow mb-3">Mode 2 · decide what to buy</div>
+        <div className="eyebrow mb-3">Reddit consensus</div>
         <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
-          Decision synthesis
+          What to buy
         </h1>
         <p className="mt-3 text-ink-muted">
           Describe a purchase. The agent reads real Reddit threads across
@@ -102,13 +114,24 @@ export default function DecisionPage() {
 
       {brief && brief.consensus_pick && brief.confidence !== "low" && (
         <Card className="mt-6 p-6 border-accent/30 bg-accent-soft">
-          <h3 className="font-semibold text-ink mb-1">Consensus is strong — let the agent act</h3>
+          <h3 className="font-semibold text-ink mb-1">Consensus is strong — let the agent buy it</h3>
           <p className="text-sm text-ink-muted mb-4">
-            Proposes a purchase through the x402 rail under your mandate.
+            Hands the pick to the checkout console: the agent finds it on the
+            store, mints a single-use card capped to the price, and checks out —
+            all under your mandate.
           </p>
-          <Button onClick={executePurchase} disabled={acting}>
-            {acting ? "Proposing…" : "Execute purchase via agent"}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() =>
+                router.push(`/commerce?q=${encodeURIComponent(searchSeed(brief.consensus_pick))}`)
+              }
+            >
+              Shop this on the store →
+            </Button>
+            <Button variant="secondary" onClick={executePurchase} disabled={acting}>
+              {acting ? "Proposing…" : "Pay via x402 (demo vendor)"}
+            </Button>
+          </div>
           {actOutcome && <p className="mt-3 text-sm text-success">{actOutcome}</p>}
         </Card>
       )}

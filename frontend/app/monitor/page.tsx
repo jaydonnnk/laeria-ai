@@ -89,7 +89,7 @@ export default function MonitorPage() {
   return (
     <main className="max-w-[1100px] mx-auto px-6 py-10 md:py-14">
       <div className="mb-8">
-        <div className="eyebrow mb-3">Mode 3 · after you commit</div>
+        <div className="eyebrow mb-3">After you commit</div>
         <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">Monitoring</h1>
         <p className="mt-3 text-ink-muted max-w-[46rem]">
           The agent watches Reddit for signal about things you own or subscribe
