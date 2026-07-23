@@ -33,6 +33,7 @@ export default function CommercePage() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [handedPick, setHandedPick] = useState<string | null>(null);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
 
   // lifecycle state — lifted so the stepper reflects the whole flow
   const [agentFunded, setAgentFunded] = useState(false);
@@ -58,13 +59,16 @@ export default function CommercePage() {
     ];
   }, [agentFunded, products, verifications, cardCount, executedCount]);
 
-  const runSearch = useCallback(async (term: string) => {
+  const runSearch = useCallback(async (term: string): Promise<StoreProduct[]> => {
     setSearching(true);
     setError(null);
     try {
-      setProducts(await api.storeSearch(term, 12));
+      const res = await api.storeSearch(term, 12);
+      setProducts(res);
+      return res;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return [];
     } finally {
       setSearching(false);
     }
@@ -75,16 +79,37 @@ export default function CommercePage() {
     await runSearch(q);
   }
 
-  // Handed a pick from "What to buy" (/decision?…→ /commerce?q=…): prefill and
-  // search immediately so research → purchase is one continuous flow.
+  // Handed a pick from "What to buy" (/commerce?q=…&auto=1): prefill, search,
+  // and — when auto — let the agent choose the best available match and
+  // propose the purchase itself. The mandate still gates it: over-threshold
+  // buys land in pending approval rather than executing.
   // Read from location rather than useSearchParams to avoid needing a Suspense
   // boundary on this statically-prerendered client page.
+  const autoRan = useRef(false);
   useEffect(() => {
-    const handed = new URLSearchParams(window.location.search).get("q");
+    if (autoRan.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const handed = params.get("q");
     if (!handed) return;
+    autoRan.current = true;
+    const auto = params.get("auto") === "1";
     setQ(handed);
     setHandedPick(handed);
-    runSearch(handed);
+    (async () => {
+      const res = await runSearch(handed);
+      if (!auto) return;
+      const best = res.find((p) => p.available);
+      if (!best) {
+        setAutoNote("No available product matched the pick — search manually below.");
+        return;
+      }
+      setAutoNote(
+        `Agent selected “${best.title}” ($${best.price_usd.toFixed(2)}) and proposed the purchase.`
+      );
+      await buy(best, null);
+    })();
+    // buy/runSearch are stable enough for this one-shot handoff
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runSearch]);
 
   async function verify(p: StoreProduct) {
@@ -165,6 +190,7 @@ export default function CommercePage() {
           <Banner tone="info" className="mb-4">
             Carried over from <b>What to buy</b> — searching the store for{" "}
             <span className="font-mono">{handedPick}</span>.
+            {autoNote && <span className="block mt-1">{autoNote}</span>}
           </Banner>
         )}
         <form onSubmit={search} className="flex gap-2 mb-5 max-w-[440px]">

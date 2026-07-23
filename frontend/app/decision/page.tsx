@@ -116,17 +116,28 @@ export default function DecisionPage() {
         <Card className="mt-6 p-6 border-accent/30 bg-accent-soft">
           <h3 className="font-semibold text-ink mb-1">Consensus is strong — let the agent buy it</h3>
           <p className="text-sm text-ink-muted mb-4">
-            Hands the pick to the checkout console: the agent finds it on the
-            store, mints a single-use card capped to the price, and checks out —
-            all under your mandate.
+            The agent finds the pick on the store, selects the best available
+            match, mints a single-use card capped to the price, and checks out —
+            all under your mandate. Anything above your confirm threshold waits
+            for your approval instead of executing.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={() =>
+                router.push(
+                  `/commerce?q=${encodeURIComponent(searchSeed(brief.consensus_pick))}&auto=1`
+                )
+              }
+            >
+              Buy the pick →
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() =>
                 router.push(`/commerce?q=${encodeURIComponent(searchSeed(brief.consensus_pick))}`)
               }
             >
-              Shop this on the store →
+              Browse the store first
             </Button>
             <Button variant="secondary" onClick={executePurchase} disabled={acting}>
               {acting ? "Proposing…" : "Pay via x402 (demo vendor)"}
