@@ -29,6 +29,11 @@
   --color-accent-soft: #e8f4ef;    /* tint bg */
   --color-accent-ink: #ffffff;     /* text on accent */
 
+  /* community signal — vote counts, thread chrome. Warm ember, used only
+     where a human upvoted something. Never competes with jade (= money). */
+  --color-signal: #c2521f;
+  --color-signal-soft: #fbf0e9;
+
   /* semantics — one each */
   --color-success: #0b7a5b;
   --color-success-soft: #e8f4ef;
