@@ -7,11 +7,11 @@ import { supabase } from "../lib/supabase";
 import { cn } from "../lib/cn";
 
 const NAV = [
-  { href: "/commerce", label: "Commerce" },
-  { href: "/actions", label: "Actions" },
   { href: "/decision", label: "What to buy" },
   { href: "/research", label: "How it went" },
   { href: "/monitor", label: "Monitor" },
+  { href: "/commerce", label: "Commerce" },
+  { href: "/actions", label: "Actions" },
 ];
 
 // App chrome. Hidden on the cinematic landing and the login page (they carry

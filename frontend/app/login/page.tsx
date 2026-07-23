@@ -23,7 +23,7 @@ export default function LoginPage() {
       setError(error.message);
       return;
     }
-    window.location.href = "/";
+    window.location.href = "/decision";
   }
 
   return (
