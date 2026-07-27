@@ -92,7 +92,9 @@ def _buy() -> bool:
     repo.set_mandate({
         **original,
         "max_per_transaction": 100.0,
-        "max_per_month": 0.0,
+        # An explicit figure, not 0.0 — an unset/zero cap is ZERO ALLOWANCE
+        # now, not unlimited (see ActionMandate).
+        "max_per_month": 500.0,
         "require_confirmation_above": 100.0,
         "autonomous_actions_enabled": True,
     })

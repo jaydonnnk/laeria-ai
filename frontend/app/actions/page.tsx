@@ -19,9 +19,9 @@ const STATUS_TONE: Record<string, "success" | "info" | "warning" | "neutral" | "
 };
 
 const DEFAULT_MANDATE: Mandate = {
-  max_per_transaction: 0,
-  max_per_month: 0,
-  require_confirmation_above: 0,
+  max_per_transaction: null,
+  max_per_month: null,
+  require_confirmation_above: null,
   allowed_categories: [],
   blocked_vendors: [],
   autonomous_actions_enabled: false,
@@ -170,8 +170,10 @@ export default function ActionsPage() {
                     onChange={(v) => setMandate({ ...mandate, require_confirmation_above: v })}
                   />
                 </div>
-                <p className="text-[13px] text-warning">
-                  <b>0</b> in any field means <b>no cap</b>, not zero dollars.
+                <p className="text-[13px] text-ink-muted">
+                  An empty cap is <b>no allowance</b>, not unlimited — the agent
+                  cannot spend against a limit you never set. There is no value
+                  that means unlimited.
                 </p>
                 <Button type="submit" disabled={busy} className="w-fit">
                   Save mandate
@@ -290,26 +292,40 @@ export default function ActionsPage() {
   );
 }
 
+// An empty field submits null, which the backend reads as ZERO ALLOWANCE.
+// There is deliberately no input that means "unlimited".
 function CapField({
   label,
   value,
   onChange,
 }: {
   label: string;
-  value: number;
-  onChange: (v: number) => void;
+  value: number | null;
+  onChange: (v: number | null) => void;
 }) {
   return (
     <Field label={label}>
-      <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden">
+      <div
+        className={`flex items-center bg-surface border rounded-[--radius] overflow-hidden ${
+          value === null ? "border-warning/50" : "border-hairline-strong"
+        }`}
+      >
         <span className="px-2.5 text-ink-subtle text-sm border-r border-hairline">$</span>
         <input
           type="number" step="0.01" min="0"
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
+          value={value ?? ""}
+          placeholder="not set"
+          onChange={(e) =>
+            onChange(e.target.value === "" ? null : Number(e.target.value))
+          }
           className="tnum w-full px-2.5 py-2 text-sm bg-transparent outline-none"
         />
       </div>
+      {value === null && (
+        <span className="text-[12px] text-warning mt-1 block">
+          not set → nothing may be spent
+        </span>
+      )}
     </Field>
   );
 }

@@ -108,7 +108,7 @@ class RedditService:
         stop=stop_after_attempt(4),
         reraise=True,
     )
-    def _get(self, path: str, params: dict | None = None) -> httpx.Response:
+    def _fetch_live(self, path: str, params: dict | None = None) -> httpx.Response:
         """Paced GET against old.reddit. Retries transient failures with
         backoff; raises on hard failures (403 = blocked, don't hammer)."""
         self._pace()
@@ -117,6 +117,88 @@ class RedditService:
 
         incr("reddit_requests")
         resp.raise_for_status()
+        return resp
+
+    @staticmethod
+    def _replayed(path: str, params: dict | None, body: str) -> httpx.Response:
+        """Wrap a recorded body so callers can't tell it from a live fetch."""
+        return httpx.Response(
+            200,
+            text=body,
+            request=httpx.Request("GET", f"{_BASE}{path}", params=params),
+        )
+
+    def _get(self, path: str, params: dict | None = None) -> httpx.Response:
+        """Fetch, replay, or fetch-then-replay depending on REDDIT_SOURCE.
+
+        Reddit is closing logged-out old.reddit access (announced 2026-06-30,
+        rolling out across the month), so a live fetch is no longer something
+        the demo can assume. See services/reddit_fixtures for the modes.
+        """
+        from services import reddit_fixtures as fx
+
+        mode = self._settings.reddit_source
+        if mode not in fx.VALID_MODES:
+            raise RuntimeError(
+                f"REDDIT_SOURCE={mode!r} is not one of {sorted(fx.VALID_MODES)}"
+            )
+
+        def replay_or_none() -> httpx.Response | None:
+            """Recorded outcome for this request: body, recorded failure, or
+            nothing. A recorded failure is re-raised so a replayed run follows
+            the same branches as the run it was captured from."""
+            status = fx.load_error(path, params)
+            if status is not None:
+                request = httpx.Request("GET", f"{_BASE}{path}", params=params)
+                raise httpx.HTTPStatusError(
+                    f"{status} (recorded at capture time)",
+                    request=request,
+                    response=httpx.Response(status, request=request),
+                )
+            body = fx.load(path, params)
+            return self._replayed(path, params, body) if body is not None else None
+
+        if mode == "fixture":
+            replayed = replay_or_none()
+            if replayed is None:
+                raise RuntimeError(
+                    f"no fixture for {path} {params or ''} — capture one with "
+                    "`python -m scripts.capture_corpus` while live access works"
+                )
+            return replayed
+
+        try:
+            resp = self._fetch_live(path, params)
+        except httpx.HTTPStatusError as exc:
+            if mode == "record":
+                # Record the failure too: a corpus that only contains successes
+                # cannot reproduce a run that handled a 403 partway through.
+                fx.save_error(path, params, exc.response.status_code)
+                raise
+            if mode != "live_then_fixture":
+                raise
+            replayed = replay_or_none()
+            if replayed is None:
+                logger.error("live Reddit fetch failed and no fixture exists for %s", path)
+                raise
+            logger.warning(
+                "live Reddit fetch failed (%s) — replaying fixture for %s", exc, path
+            )
+            return replayed
+        except Exception as exc:  # noqa: BLE001
+            if mode != "live_then_fixture":
+                raise
+            replayed = replay_or_none()
+            if replayed is None:
+                logger.error("live Reddit fetch failed and no fixture exists for %s", path)
+                raise
+            logger.warning(
+                "live Reddit fetch failed (%s) — replaying fixture for %s", exc, path
+            )
+            return replayed
+
+        if mode == "record":
+            fx.save(path, params, resp.text)
         return resp
 
     def healthcheck(self) -> bool:

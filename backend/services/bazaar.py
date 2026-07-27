@@ -20,10 +20,19 @@ logger = get_logger(__name__)
 
 _DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
 
-# Networks our signer can actually pay on (EVM exact scheme). Fuji included
-# for the hackathon rail swap — the signer registers it via
-# X402_EXTRA_NETWORKS (see docs/HACKATHON_SWAP.md).
-PAYABLE_NETWORKS = {"eip155:8453", "eip155:84532", "eip155:43113"}
+# Networks our signer can actually pay on (EVM exact scheme). Must track
+# payment._signer_client, or a listing gets flagged payable and then fails at
+# signing time. Base mainnet only counts when X402_ALLOW_MAINNET is on.
+def payable_networks() -> set[str]:
+    from core.config import get_settings
+
+    s = get_settings()
+    nets = {s.x402_network}
+    if s.x402_allow_mainnet:
+        nets.add("eip155:8453")
+    if s.x402_extra_networks:
+        nets.update(n.strip() for n in s.x402_extra_networks.split(",") if n.strip())
+    return nets
 
 
 def _parse_item(item: dict) -> dict | None:
@@ -47,7 +56,7 @@ def _parse_item(item: dict) -> dict | None:
         "amount_usd": amount_usd,
         "network": acc.get("network", ""),
         "pay_to": acc.get("payTo", ""),
-        "payable_by_agent": acc.get("network") in PAYABLE_NETWORKS
+        "payable_by_agent": acc.get("network") in payable_networks()
         and not _is_templated(resource),
         "last_updated": item.get("lastUpdated") or item.get("last_updated") or "",
     }

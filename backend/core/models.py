@@ -119,9 +119,18 @@ class OutcomeSummary(BaseModel):
 # ---- Mode 3: Monitoring ----
 
 class ActionMandate(BaseModel):
-    max_per_transaction: float = 0.0
-    max_per_month: float = 0.0
-    require_confirmation_above: float = 0.0
+    """Standing spending rules.
+
+    An unset cap means NO ALLOWANCE, not unlimited. `None` is the default so
+    that a missing profile row — `ActionMandate(**{})` — denies everything
+    rather than authorising unbounded autonomous spend. A cap of 0.0 is
+    likewise zero allowance; there is deliberately no way to express
+    "unlimited" in this model.
+    """
+
+    max_per_transaction: float | None = None
+    max_per_month: float | None = None
+    require_confirmation_above: float | None = None
     allowed_categories: list[str] = Field(default_factory=list)
     blocked_vendors: list[str] = Field(default_factory=list)
     autonomous_actions_enabled: bool = False

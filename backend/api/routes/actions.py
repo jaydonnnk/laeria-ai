@@ -24,9 +24,11 @@ APPROVAL_WINDOW_MINUTES = 10
 
 
 class MandateUpdate(BaseModel):
-    max_per_transaction: float = Field(default=0, ge=0)
-    max_per_month: float = Field(default=0, ge=0)
-    require_confirmation_above: float = Field(default=0, ge=0)
+    # None = unset = zero allowance (see ActionMandate). There is no value
+    # that means "unlimited"; omitting a cap denies rather than permits.
+    max_per_transaction: float | None = Field(default=None, ge=0)
+    max_per_month: float | None = Field(default=None, ge=0)
+    require_confirmation_above: float | None = Field(default=None, ge=0)
     allowed_categories: list[str] = []
     blocked_vendors: list[str] = []
     autonomous_actions_enabled: bool = False
@@ -51,36 +53,72 @@ def _mandate() -> ActionMandate:
     return ActionMandate(**repo.get_mandate())
 
 
-def _execute(action_id: str, target_url: str) -> dict:
+def _execute(action_id: str, target_url: str, approved_usd: float = 0.0) -> dict:
     """Pay the target and mark the action executed. Failure marks it failed.
 
-    Defense in depth: rediscovers the price at execution time and re-verifies
-    the hard mandate caps against the ACTUAL amount, then hands pay_402 that
-    amount as a ceiling. A price that appeared only after the mandate check
-    (vendor error during discovery, or a changed price) can therefore never
-    exceed the mandate."""
+    Defense in depth: rediscovers the price at execution time, refuses if it
+    drifted above what was approved, re-verifies the hard mandate caps against
+    the ACTUAL amount, then hands pay_402 the approved figure as a ceiling. A
+    price that appeared only after the mandate check (vendor error during
+    discovery, or a changed price) can therefore neither exceed the mandate
+    nor quietly exceed what a human consented to."""
+    from core.config import get_settings
     from db import repositories as repo
-    from services.payment import MandateViolation, PaymentService
+    from services.payment import MandateViolation, PaymentService, vendor_host
 
     try:
         svc = PaymentService()
         offer = svc.check_402(target_url)
         actual = float(offer["amount_usd"]) if offer else 0.0
-        # Hard amount caps only — category/vendor were checked at propose and
-        # cannot have changed; a human already approved (or the mandate
-        # cleared) this action, so confirmation thresholds don't re-apply.
-        recheck_mandate = _mandate().model_copy(update={"allowed_categories": []})
+
+        # Consent binds to an amount. Without this the mandate recheck below
+        # compares the new price against itself and passes vacuously.
+        tolerance = get_settings().price_drift_tolerance
+        ceiling = actual
+        if approved_usd > 0:
+            ceiling = min(actual, approved_usd * (1 + tolerance))
+            if actual > approved_usd * (1 + tolerance):
+                repo.update_action(
+                    action_id,
+                    {
+                        "status": "pending_approval",
+                        "amount_usd": actual,
+                        "metadata": {
+                            **(repo.get_action(action_id) or {}).get("metadata", {}),
+                            "expires_at": (
+                                datetime.now(timezone.utc)
+                                + timedelta(minutes=APPROVAL_WINDOW_MINUTES)
+                            ).isoformat(),
+                            "reprice": {"approved": approved_usd, "now": actual},
+                        },
+                    },
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"price moved ${approved_usd:.2f} → ${actual:.2f} since "
+                        f"approval (tolerance {tolerance:.0%}) — re-approval required"
+                    ),
+                )
+
+        # Hard amount caps only — category/vendor were re-checked against the
+        # live mandate here because PUT /actions/mandate can change them
+        # inside the approval window.
+        recheck_mandate = _mandate()
         svc.verify_within_mandate(
             amount_usd=actual,
             category="",
-            mandate=recheck_mandate,
+            mandate=recheck_mandate.model_copy(update={"allowed_categories": []}),
             spent_this_month=repo.executed_spend_this_month(),
+            vendor=vendor_host(target_url),
         )
-        result = svc.pay_402(target_url, max_amount_usd=actual)
+        result = svc.pay_402(target_url, max_amount_usd=ceiling)
     except MandateViolation as exc:
         repo.update_action(action_id, {"status": "cancelled",
                                        "metadata": {"mandate_violation": str(exc)}})
         raise HTTPException(status_code=409, detail=f"mandate violation at execution: {exc}") from exc
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         repo.update_action(action_id, {"status": "failed", "metadata": {"error": str(exc)}})
         raise HTTPException(status_code=502, detail=f"execution failed: {exc}") from exc
@@ -105,6 +143,7 @@ def _execute_card_purchase(action: dict) -> dict:
 
     The card dies in the finally block: success or failure, a disposable
     card never outlives its one purchase attempt."""
+    from core.config import get_settings
     from db import repositories as repo
     from services.cards import StripeIssuingAdapter, get_issuer
     from services.checkout import (
@@ -112,7 +151,7 @@ def _execute_card_purchase(action: dict) -> dict:
         execute_checkout,
         shipping_from_settings,
     )
-    from services.payment import MandateViolation, PaymentService
+    from services.payment import MandateViolation, PaymentService, vendor_host
     from services.storefront import StorefrontService
 
     action_id = action["id"]
@@ -134,19 +173,59 @@ def _execute_card_purchase(action: dict) -> dict:
         # the HIGHER of DOM and listing so the ceiling covers what checkout
         # will actually charge (the in-checkout total gate still has the
         # final word).
-        actual = max(dom_price, float(action.get("amount_usd") or 0))
+        approved = float(action.get("amount_usd") or 0)
+        actual = max(dom_price, approved)
 
+        # Consent was given for `approved`. Nothing below may quietly spend
+        # more than that: without this the "three verification layers" all
+        # compare the current price against the current price, and a price
+        # that moved inside the approval window executes at the new number.
+        tolerance = get_settings().price_drift_tolerance
+        if approved > 0 and actual > approved * (1 + tolerance):
+            repo.update_action(
+                action_id,
+                {
+                    "status": "pending_approval",
+                    "expires_at": (
+                        datetime.now(timezone.utc)
+                        + timedelta(minutes=APPROVAL_WINDOW_MINUTES)
+                    ).isoformat(),
+                    "amount_usd": actual,
+                    "metadata": {
+                        **meta,
+                        "reprice": {"approved": approved, "now": actual},
+                    },
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"price moved ${approved:.2f} → ${actual:.2f} since approval "
+                    f"(tolerance {tolerance:.0%}) — re-approval required"
+                ),
+            )
+
+        # Re-read the mandate live: PUT /actions/mandate can change caps and
+        # blocked_vendors inside the approval window, so nothing checked at
+        # propose time can be assumed still true here. allowed_categories is
+        # the one exception — the product's category is not re-derivable from
+        # the storefront, so it stays checked at propose only.
         recheck_mandate = _mandate().model_copy(update={"allowed_categories": []})
         PaymentService().verify_within_mandate(
             amount_usd=actual,
             category="",
             mandate=recheck_mandate,
             spent_this_month=repo.executed_spend_this_month(),
+            vendor=vendor_host(action.get("target") or ""),
         )
     except MandateViolation as exc:
         repo.update_action(action_id, {"status": "cancelled",
                                        "metadata": {**meta, "mandate_violation": str(exc)}})
         raise HTTPException(status_code=409, detail=f"mandate violation at execution: {exc}") from exc
+    except HTTPException:
+        # Already a considered response (e.g. the reprice re-approval above) —
+        # the action row is set; do not relabel it as a generic failure.
+        raise
     except Exception as exc:  # noqa: BLE001
         repo.update_action(action_id, {"status": "failed",
                                        "metadata": {**meta, "error": str(exc)}})
@@ -154,17 +233,18 @@ def _execute_card_purchase(action: dict) -> dict:
 
     # Ceiling for the card limit AND the in-checkout total gate: verified
     # price + shipping/taxes allowance, hard-clamped to whatever mandate
-    # headroom remains. The final checkout total must fit under this or the
-    # executor refuses before card entry.
-    from core.config import get_settings
-
+    # headroom remains AND to what the human actually approved. The final
+    # checkout total must fit under this or the executor refuses before card
+    # entry.
     mandate_now = _mandate()
     headrooms = [
         float(actual) * 1.05 + get_settings().checkout_shipping_buffer_usd
     ]
-    if mandate_now.max_per_transaction > 0:
+    if approved > 0:
+        headrooms.append(approved * (1 + tolerance) + get_settings().checkout_shipping_buffer_usd)
+    if mandate_now.max_per_transaction is not None:
         headrooms.append(mandate_now.max_per_transaction)
-    if mandate_now.max_per_month > 0:
+    if mandate_now.max_per_month is not None:
         headrooms.append(
             mandate_now.max_per_month - repo.executed_spend_this_month()
         )
@@ -379,7 +459,7 @@ def propose_action(req: ProposeRequest) -> dict:
     if req.rail == "card":
         executed = _execute_card_purchase(action)
     else:
-        executed = _execute(action["id"], req.target_url)
+        executed = _execute(action["id"], req.target_url, approved_usd=amount)
     return {"action": executed, "outcome": "executed autonomously (within mandate)"}
 
 
@@ -411,7 +491,9 @@ def approve_action(action_id: str) -> dict:
         executed = _execute_card_purchase(action)
         return {"action": executed, "outcome": "approved and executed (card rail)"}
 
-    executed = _execute(action_id, action["target"])
+    executed = _execute(
+        action_id, action["target"], approved_usd=float(action.get("amount_usd") or 0)
+    )
     return {"action": executed, "outcome": "approved and executed"}
 
 

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # scraping work. Empty = direct connection (fine on a residential IP).
     # Format: "http://user:pass@host:port" or "socks5://host:port".
     reddit_proxy: str = ""
+    # Where Reddit HTML comes from: "live" | "record" | "fixture" |
+    # "live_then_fixture". Reddit is closing logged-out old.reddit access
+    # (announced 2026-06-30, rolling out over the following month), so a live
+    # fetch can no longer be assumed. Demos should run "live_then_fixture".
+    # See services/reddit_fixtures.py.
+    reddit_source: str = "live_then_fixture"
 
     # Obsidian
     obsidian_api_url: str = "https://127.0.0.1:27124"
@@ -56,9 +62,14 @@ class Settings(BaseSettings):
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
     # Comma-separated extra networks to register the signer for, beyond
-    # x402_network + Base mainnet — e.g. "eip155:43113" for Avalanche Fuji.
+    # x402_network — e.g. "eip155:43113" for Avalanche Fuji.
     # See docs/HACKATHON_SWAP.md.
     x402_extra_networks: str = ""
+    # Base mainnet signing is OFF unless this is explicitly flipped. Bazaar
+    # listings are mainnet, so registering the signer there is what makes a
+    # real-money payment possible — that has to be a deliberate act, matching
+    # wallet.fund_agent's refusal to move mainnet funds from an endpoint.
+    x402_allow_mainnet: bool = False
 
     # Where agent-initiated purchases/replacements are executed. Points at our
     # own x402 vendor until real x402 merchants exist — swap when they do.
@@ -101,6 +112,11 @@ class Settings(BaseSettings):
     # bound the final number — this only stops shipping from tripping the
     # gate on an otherwise-approved purchase.
     checkout_shipping_buffer_usd: float = 20.0
+    # How far the live price may drift above the amount a human approved
+    # before the action is sent back for re-approval instead of executing.
+    # Consent is for an amount, not merely for a purchase — this is what
+    # makes the approved figure a real ceiling rather than a starting point.
+    price_drift_tolerance: float = 0.05
 
     # App
     cors_origins: str = ""  # comma-separated; empty = allow all (dev)

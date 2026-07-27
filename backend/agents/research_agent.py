@@ -198,6 +198,26 @@ class ResearchAgent:
     # ---- internals ----
 
     def _identify_subreddits(self, query: str) -> dict:
+        # The plan decides which URLs get fetched, so it is part of the
+        # recorded corpus — replaying HTML against a freshly-generated plan
+        # would miss every fixture. See services/reddit_fixtures.
+        from core.config import get_settings
+        from services import reddit_fixtures as fx
+
+        mode = get_settings().reddit_source
+        if mode in ("fixture", "live_then_fixture"):
+            cached = fx.load_plan(query)
+            if cached is not None:
+                return {
+                    "subreddits": cached["subreddits"],
+                    "search_queries": cached["search_queries"],
+                }
+            if mode == "fixture":
+                raise RuntimeError(
+                    f"no recorded research plan for {query!r} — capture one with "
+                    "`python -m scripts.capture_corpus`"
+                )
+
         raw = self._llm.complete_json(
             _IDENTIFY_SYSTEM, f"Research query: {query}", max_tokens=400
         )
@@ -208,7 +228,10 @@ class ResearchAgent:
         # Tolerate old-style single search_query responses.
         if not queries and raw.get("search_query"):
             queries = [str(raw["search_query"])]
-        return {"subreddits": subs, "search_queries": (queries or [query])[:3]}
+        plan = {"subreddits": subs, "search_queries": (queries or [query])[:3]}
+        if mode == "record":
+            fx.save_plan(query, plan)
+        return plan
 
     def _synthesise(
         self, query: str, threads: list[RedditThread], subreddits: list[str]

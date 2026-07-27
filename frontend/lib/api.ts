@@ -309,9 +309,10 @@ export interface BazaarService {
 }
 
 export interface Mandate {
-  max_per_transaction: number;
-  max_per_month: number;
-  require_confirmation_above: number;
+  // null = unset = zero allowance. No value expresses "unlimited".
+  max_per_transaction: number | null;
+  max_per_month: number | null;
+  require_confirmation_above: number | null;
   allowed_categories: string[];
   blocked_vendors: string[];
   autonomous_actions_enabled: boolean;

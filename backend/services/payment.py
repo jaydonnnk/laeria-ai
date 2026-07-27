@@ -56,30 +56,53 @@ class PaymentService:
 
         Returns (needs_confirmation, reason). Raises MandateViolation when the
         action is flat-out not allowed (vs merely needing confirmation).
+
+        Unset (None) caps mean ZERO ALLOWANCE, never unlimited. An empty
+        mandate must deny; the failure mode where a missing profile row reads
+        as "no limits configured, therefore no limits" is the standard way
+        spending controls fail and it is closed here by construction.
         """
         if not mandate.autonomous_actions_enabled:
             return True, "autonomous actions are disabled — everything needs confirmation"
-        if mandate.max_per_transaction > 0 and amount_usd > mandate.max_per_transaction:
+
+        per_txn = mandate.max_per_transaction
+        if per_txn is None:
             raise MandateViolation(
-                f"amount ${amount_usd:.2f} exceeds per-transaction cap "
-                f"${mandate.max_per_transaction:.2f}"
+                "no per-transaction cap is set — an unset cap is zero allowance, "
+                "not unlimited; set one before autonomous spending"
             )
-        if mandate.max_per_month > 0 and spent_this_month + amount_usd > mandate.max_per_month:
+        if amount_usd > per_txn:
             raise MandateViolation(
-                f"would exceed monthly cap ${mandate.max_per_month:.2f} "
+                f"amount ${amount_usd:.2f} exceeds per-transaction cap ${per_txn:.2f}"
+            )
+
+        per_month = mandate.max_per_month
+        if per_month is None:
+            raise MandateViolation(
+                "no monthly cap is set — an unset cap is zero allowance, not unlimited"
+            )
+        if spent_this_month + amount_usd > per_month:
+            raise MandateViolation(
+                f"would exceed monthly cap ${per_month:.2f} "
                 f"(${spent_this_month:.2f} already spent)"
             )
+
         if mandate.allowed_categories and category not in mandate.allowed_categories:
             raise MandateViolation(f"category {category!r} is not in allowed_categories")
         if vendor and vendor in mandate.blocked_vendors:
             raise MandateViolation(f"vendor {vendor!r} is blocked")
-        if (
-            mandate.require_confirmation_above > 0
-            and amount_usd > mandate.require_confirmation_above
-        ):
+
+        # Unset threshold => confirm everything. Fail-safe direction: the
+        # absence of a rule cannot be what authorises silent execution.
+        confirm_above = mandate.require_confirmation_above
+        if confirm_above is None:
             return True, (
-                f"${amount_usd:.2f} is above the confirm threshold "
-                f"${mandate.require_confirmation_above:.2f}"
+                "no confirm threshold is set — defaulting to confirmation for "
+                f"${amount_usd:.2f}"
+            )
+        if amount_usd > confirm_above:
+            return True, (
+                f"${amount_usd:.2f} is above the confirm threshold ${confirm_above:.2f}"
             )
         return False, "within mandate — cleared for autonomous execution"
 
@@ -98,15 +121,28 @@ class PaymentService:
             raise RuntimeError("X402_AGENT_PRIVATE_KEY not configured in .env")
         account = Account.from_key(key)
         client = x402ClientSync()
-        # Register the configured network, Base mainnet (Bazaar services are
-        # mainnet, our demo vendor is testnet), and any extra networks from
-        # config (e.g. Avalanche Fuji for the hackathon rail swap — one env
-        # var, no code change). Same wallet signs for all; whether a payment
-        # succeeds depends on that network actually being funded.
-        networks = {self._settings.x402_network, "eip155:8453"}
+        # Register the configured network plus any extra networks from config
+        # (e.g. Avalanche Fuji for the hackathon rail swap — one env var, no
+        # code change). Same wallet signs for all; whether a payment succeeds
+        # depends on that network actually being funded.
+        #
+        # Base mainnet is NOT registered by default. Bazaar listings are
+        # mainnet, so registering it is precisely what turns a bug into a
+        # real-money transfer — and this path has no test coverage. Flip
+        # X402_ALLOW_MAINNET to opt in, the same deliberate act wallet.py
+        # requires before it will move mainnet funds.
+        networks = {self._settings.x402_network}
+        if self._settings.x402_allow_mainnet:
+            networks.add("eip155:8453")
         if self._settings.x402_extra_networks:
             networks.update(
                 n.strip() for n in self._settings.x402_extra_networks.split(",") if n.strip()
+            )
+        if "eip155:8453" in networks and not self._settings.x402_allow_mainnet:
+            raise RuntimeError(
+                "Base mainnet signing requested via X402_EXTRA_NETWORKS but "
+                "X402_ALLOW_MAINNET is false — refusing to register a "
+                "real-money signer implicitly"
             )
         register_exact_evm_client(
             client, EthAccountSigner(account), networks=sorted(networks)

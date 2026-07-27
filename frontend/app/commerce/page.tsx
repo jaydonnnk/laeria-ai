@@ -450,7 +450,8 @@ function MandateSummary({ onError }: { onError: (e: string) => void }) {
     );
   }, [onError]);
   if (!mandate) return null;
-  const cap = (v: number) => (v > 0 ? `$${v.toFixed(2)}` : "no cap");
+  // An unset cap is zero allowance, so it must never read as permissive.
+  const cap = (v: number | null) => (v === null ? "not set" : `$${v.toFixed(2)}`);
   return (
     <section className="mb-10">
       <Card className="px-5 py-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
