@@ -101,6 +101,15 @@ body {
   color: var(--color-accent-press);
 }
 
+/* the mobile nav row scrolls, but a visible scrollbar under five tabs reads
+   as a rendering fault rather than an affordance */
+.nav-scroll {
+  scrollbar-width: none;
+}
+.nav-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* thin, unobtrusive scrollbar */
 * {
   scrollbar-width: thin;
