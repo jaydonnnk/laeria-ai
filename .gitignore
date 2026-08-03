@@ -15,6 +15,11 @@ venv/
 *.pem
 credentials.json
 
+# Saved browser session for authed-page verification. Contains a LIVE Supabase
+# access token — treat it exactly like a password and never commit it.
+.auth/
+storage_state.json
+
 # Node / Next.js
 node_modules/
 .next/
