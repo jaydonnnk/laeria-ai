@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -64,11 +65,28 @@ def check_page(context, path: str, label: str, viewport: str, site: str) -> dict
 
     page.on("response", on_response)
 
+    # Track in-flight requests so a genuinely stuck call is still caught
+    # without depending on "networkidle" — a deployed Next app prefetches RSC
+    # payloads continuously, so the network never goes quiet for 500ms and
+    # networkidle times out on a page that loaded in 300ms.
+    inflight: dict[str, float] = {}
+    page.on("request", lambda r: inflight.__setitem__(r.url, time.time()))
+    page.on("requestfinished", lambda r: inflight.pop(r.url, None))
+    page.on("requestfailed", lambda r: inflight.pop(r.url, None))
+
     try:
-        page.goto(f"{site}{path}", wait_until="networkidle", timeout=60_000)
-        page.wait_for_timeout(2500)
+        page.goto(f"{site}{path}", wait_until="domcontentloaded", timeout=45_000)
+        page.wait_for_timeout(6000)  # let data calls resolve
     except Exception as exc:  # noqa: BLE001
         page_errors.append(f"navigation failed: {exc}")
+
+    stuck = [
+        u
+        for u, started in inflight.items()
+        if time.time() - started > 15 and ("/api" in u or "onrender" in u or "supabase" in u)
+    ]
+    for u in stuck:
+        failed.append(f"STUCK >15s {u[:110]}")
 
     # Did the app bounce us back to login? That means the session is not valid.
     bounced = "/login" in page.url
