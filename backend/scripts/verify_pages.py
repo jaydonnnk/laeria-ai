@@ -20,10 +20,14 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 AUTH_DIR = Path(__file__).resolve().parent.parent / ".auth"
-STATE_PATH = AUTH_DIR / "storage_state.json"
-SHOT_DIR = Path(__file__).resolve().parent.parent / ".auth" / "shots"
+SHOT_DIR = AUTH_DIR / "shots"
 
-FRONTEND = "http://localhost:3000"
+LOCAL = "http://localhost:3000"
+
+
+def state_path(site: str) -> Path:
+    tag = "local" if "localhost" in site or "127.0.0.1" in site else "prod"
+    return AUTH_DIR / f"storage_state.{tag}.json"
 
 PAGES = [
     ("/decision", "What to buy"),
@@ -38,7 +42,7 @@ PAGES = [
 AUTH_STATUSES = {401, 403}
 
 
-def check_page(context, path: str, label: str, viewport: str) -> dict:
+def check_page(context, path: str, label: str, viewport: str, site: str) -> dict:
     page = context.new_page()
     console_errors: list[str] = []
     page_errors: list[str] = []
@@ -61,7 +65,7 @@ def check_page(context, path: str, label: str, viewport: str) -> dict:
     page.on("response", on_response)
 
     try:
-        page.goto(f"{FRONTEND}{path}", wait_until="networkidle", timeout=45_000)
+        page.goto(f"{site}{path}", wait_until="networkidle", timeout=60_000)
         page.wait_for_timeout(2500)
     except Exception as exc:  # noqa: BLE001
         page_errors.append(f"navigation failed: {exc}")
@@ -141,12 +145,16 @@ def report(results: list[dict]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--mobile", action="store_true", help="also check at 390x844")
+    ap.add_argument("--site", default=LOCAL, help=f"origin to check (default {LOCAL})")
     args = ap.parse_args()
 
+    site = args.site.rstrip("/")
+    STATE_PATH = state_path(site)
     if not STATE_PATH.exists():
-        print(f"no saved session at {STATE_PATH}")
-        print("run `python -m scripts.save_login` first (it needs you to sign in).")
+        print(f"no saved session for {site} ({STATE_PATH.name})")
+        print(f"run `python -m scripts.save_login --site {site}` first.")
         return 1
+    print(f"checking {site}")
 
     viewports = [("desktop", {"width": 1440, "height": 900})]
     if args.mobile:
@@ -162,7 +170,7 @@ def main() -> int:
             print(f"\n--- {name} {vp['width']}x{vp['height']} ---")
             for path, label in PAGES:
                 print(f"  checking {path} ...")
-                results.append(check_page(context, path, label, name))
+                results.append(check_page(context, path, label, name, site))
             context.close()
         browser.close()
 

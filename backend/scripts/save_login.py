@@ -25,25 +25,35 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 AUTH_DIR = Path(__file__).resolve().parent.parent / ".auth"
-STATE_PATH = AUTH_DIR / "storage_state.json"
 
-FRONTEND = "http://localhost:3000"
+LOCAL = "http://localhost:3000"
 LOGIN_PATH = "/login"
 # How long to wait for the human to finish typing.
 LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 
 
-def clear() -> int:
-    if STATE_PATH.exists():
-        STATE_PATH.unlink()
-        print(f"deleted {STATE_PATH}")
-    else:
+def state_path(site: str) -> Path:
+    """Sessions are per-origin — a localhost cookie will not authenticate
+    against the deployed domain, so they are stored separately."""
+    tag = "local" if "localhost" in site or "127.0.0.1" in site else "prod"
+    return AUTH_DIR / f"storage_state.{tag}.json"
+
+
+def clear(site: str) -> int:
+    removed = 0
+    for p in AUTH_DIR.glob("storage_state*.json"):
+        p.unlink()
+        print(f"deleted {p.name}")
+        removed += 1
+    if not removed:
         print("nothing to delete")
     return 0
 
 
-def capture() -> int:
+def capture(site: str) -> int:
     AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    FRONTEND = site
+    STATE_PATH = state_path(site)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
@@ -84,7 +94,7 @@ def capture() -> int:
         landed = page.url
         browser.close()
 
-    print(f"saved session -> {STATE_PATH}")
+    print(f"saved session -> {STATE_PATH.name}")
     print(f"landed on      {landed}")
     print()
     print("This file holds a live access token. It is gitignored — keep it that")
@@ -96,9 +106,15 @@ def capture() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--clear", action="store_true", help="delete the saved session")
+    ap.add_argument("--clear", action="store_true", help="delete saved sessions")
+    ap.add_argument(
+        "--site",
+        default=LOCAL,
+        help=f"frontend origin to sign in against (default {LOCAL})",
+    )
     args = ap.parse_args()
-    return clear() if args.clear else capture()
+    site = args.site.rstrip("/")
+    return clear(site) if args.clear else capture(site)
 
 
 if __name__ == "__main__":
