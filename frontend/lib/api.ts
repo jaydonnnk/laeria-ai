@@ -5,6 +5,11 @@ import { supabase } from "./supabase";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Requests that only read may be replayed safely; anything that spends money
+// or mutates state must not be retried behind the user's back.
+const RETRYABLE_METHODS = new Set(["GET", "HEAD"]);
+const RETRY_DELAY_MS = 600;
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -12,14 +17,38 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     window.location.href = "/login";
     throw new Error("not signed in");
   }
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(options?.headers ?? {}),
-    },
-  });
+
+  const method = (options?.method ?? "GET").toUpperCase();
+  const canRetry = RETRYABLE_METHODS.has(method);
+
+  const send = () =>
+    fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options?.headers ?? {}),
+      },
+    });
+
+  let res: Response;
+  try {
+    res = await send();
+  } catch (err) {
+    // A dropped connection surfaces as a TypeError with no status. These are
+    // intermittent against the deployed backend and a single replay clears
+    // almost all of them — without it, one blip banners a whole page.
+    if (!canRetry) throw err;
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    res = await send();
+  }
+
+  // 502/503/504 from a cold or restarting backend are worth one replay too.
+  if (canRetry && [502, 503, 504].includes(res.status)) {
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+    res = await send();
+  }
+
   if (res.status === 401 || res.status === 403) {
     if (typeof window !== "undefined") window.location.href = "/login";
     throw new Error("session expired — sign in again");

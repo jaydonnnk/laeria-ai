@@ -14,9 +14,11 @@ On **June 30, 2026**, Reddit announced that old.reddit.com will require login, r
 
 Your file header notes markup "verified live 2026-07-11" — eleven days *after* the announcement. You verified the selectors and missed the eviction notice.
 
-There is precedent and it is not encouraging. **GummySearch — the category-leading Reddit research product, with paying customers and years of operating history — shut down commercial operations after Reddit denied its API access.** They asked permission and were told no. Your plan is to not ask.
+There is precedent and it is not encouraging. **GummySearch — the category-leading Reddit research product, with paying customers and years of operating history — shut down commercial operations after Reddit denied its API access.** They asked permission and were told no.
 
-The fallback in your docstring is "swap to a sanctioned third-party provider (Apify/Data365/etc.)." Those are resellers of the same scraping with the same legal exposure, and they charge per request. Your unit economics currently assume the data is free. It isn't free, it's stolen, and the theft is being actively shut down.
+The fallback in your docstring is "swap to a sanctioned third-party provider (Apify/Data365/etc.)." Those are resellers of the same scraping, carrying the same terms-of-service exposure, and they charge per request. Your unit economics currently assume the data is free. It is not free and it is not sanctioned — the access path you rely on is being closed, and every sanctioned alternative has a price attached.
+
+> **Update, 2026-08-03.** A Data API application was filed under the Responsible Builder Policy and **denied** the same day, citing non-compliance and/or missing detail without specifying which. The application disclosed the current logged-out HTML access. A reply asking which element was at fault is the remaining free option; the questions below stand unchanged.
 
 **Everything below this line is subordinate to this problem.** You have a research product with no legal, durable, affordable path to its only input.
 
@@ -39,7 +41,7 @@ Cost per operation, counted from your own code:
 | Mode | Requests | Forced sleep |
 |---|---|---|
 | Mode 2 (`synthesise_decision`) | 4 subs × 3 queries = 12 searches + 8 thread fetches = **20** | **30s** |
-| Mode 1 (`mine_retrospectives`) | 4 subs × 4 templates = 16 + 3 site-wide + 8 fetches = **27** | **40.5s** |
+| Mode 1 (`mine_retrospectiveRFs`) | 4 subs × 4 templates = 16 + 3 site-wide + 8 fetches = **27** | **40.5s** |
 
 Two Mode-2 queries per minute. Total. That is not a rate limit you tune later — it's the shape of the system. Ten simultaneous users means the tenth waits five minutes in the lock before their own 30 seconds begins.
 

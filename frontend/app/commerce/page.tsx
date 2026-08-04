@@ -179,9 +179,9 @@ export default function CommercePage() {
         <Stepper steps={steps} />
       </Card>
 
-      <FundingSection onError={setError} onFunded={setAgentFunded} />
+      <FundingSection onFunded={setAgentFunded} />
 
-      <MandateSummary onError={setError} />
+      <MandateSummary />
 
       {/* ---- Discover ---- */}
       <section className="mb-10">
@@ -226,9 +226,9 @@ export default function CommercePage() {
         )}
       </section>
 
-      <CardsSection onError={setError} onCount={setCardCount} />
+      <CardsSection onCount={setCardCount} />
 
-      <ExecutionLog onError={setError} onExecuted={setExecutedCount} />
+      <ExecutionLog onExecuted={setExecutedCount} />
     </main>
   );
 }
@@ -334,28 +334,52 @@ function ProductRow({
 
 /* ------------------------------------------------------------------ */
 
-function FundingSection({
-  onError,
-  onFunded,
+/** Inline, section-scoped failure notice.
+ *
+ *  Every section used to report into one page-level banner, so a single
+ *  transient call painted an error across the whole console — including the
+ *  parts that had loaded perfectly well. Failures now stay where they
+ *  happened and offer a retry. */
+function SectionNotice({
+  message,
+  onRetry,
 }: {
-  onError: (e: string) => void;
-  onFunded: (v: boolean) => void;
+  message: string;
+  onRetry?: () => void;
 }) {
+  return (
+    <div className="flex items-start gap-3 text-[13px] text-danger bg-danger-soft border border-danger/20 rounded-[--radius] px-3 py-2 mb-3">
+      <span className="flex-1 leading-snug">{message}</span>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="font-mono text-[11px] uppercase tracking-wide hover:underline shrink-0 mt-px"
+        >
+          retry
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
   const [balances, setBalances] = useState<WalletBalances | null>(null);
   const [amount, setAmount] = useState("1");
   const [funding, setFunding] = useState(false);
   const [fundMsg, setFundMsg] = useState<React.ReactNode>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const b = await api.walletBalances();
       setBalances(b);
+      setErr(null);
       const agentUsdc = "usdc" in b.agent ? b.agent.usdc ?? 0 : 0;
       onFunded(agentUsdc > 0);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [onError, onFunded]);
+  }, [onFunded]);
 
   useEffect(() => {
     refresh();
@@ -365,6 +389,7 @@ function FundingSection({
     e.preventDefault();
     setFunding(true);
     setFundMsg(null);
+    setErr(null);
     try {
       const res = await api.walletFund(Number(amount));
       setFundMsg(
@@ -377,8 +402,8 @@ function FundingSection({
         </>
       );
       setTimeout(refresh, 6000);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setFunding(false);
     }
@@ -387,6 +412,7 @@ function FundingSection({
   return (
     <section className="mb-10">
       <SectionHeader n="01" title="Fund" aside={balances?.network ?? "…"} />
+      {err && <SectionNotice message={err} onRetry={refresh} />}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         {(["agent", "treasury"] as const).map((role) => {
           const party = balances?.[role];
@@ -441,14 +467,28 @@ function FundingSection({
 
 /* ------------------------------------------------------------------ */
 
-function MandateSummary({ onError }: { onError: (e: string) => void }) {
+function MandateSummary() {
   const [mandate, setMandate] = useState<Mandate | null>(null);
-  useEffect(() => {
+  const [err, setErr] = useState<string | null>(null);
+  const load = useCallback(() => {
     api.getMandate().then(
-      (m) => setMandate(m as Mandate),
-      (err) => onError(err instanceof Error ? err.message : String(err))
+      (m) => {
+        setMandate(m as Mandate);
+        setErr(null);
+      },
+      (e) => setErr(e instanceof Error ? e.message : String(e))
     );
-  }, [onError]);
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  if (err) {
+    return (
+      <section className="mb-10">
+        <SectionNotice message={`Mandate unavailable — ${err}`} onRetry={load} />
+      </section>
+    );
+  }
   if (!mandate) return null;
   // An unset cap is zero allowance, so it must never read as permissive.
   const cap = (v: number | null) => (v === null ? "not set" : `$${v.toFixed(2)}`);
@@ -473,27 +513,23 @@ function MandateSummary({ onError }: { onError: (e: string) => void }) {
 
 /* ------------------------------------------------------------------ */
 
-function CardsSection({
-  onError,
-  onCount,
-}: {
-  onError: (e: string) => void;
-  onCount: (n: number) => void;
-}) {
+function CardsSection({ onCount }: { onCount: (n: number) => void }) {
   const [cards, setCards] = useState<CardT[] | null>(null);
   const [limit, setLimit] = useState("25");
   const [issuing, setIssuing] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
       const c = await api.listCards();
       setCards(c);
+      setErr(null);
       onCount(c.length);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [onError, onCount]);
+  }, [onCount]);
 
   useEffect(() => {
     refresh();
@@ -502,13 +538,14 @@ function CardsSection({
   async function testIssue(e: React.FormEvent) {
     e.preventDefault();
     setIssuing(true);
+    setErr(null);
     try {
       await api.testIssueCard(Number(limit) || 1, "dev test issue");
       await refresh();
       // deal-in the newest card
       requestAnimationFrame(() => dealIn(gridRef.current?.firstElementChild as HTMLElement));
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setIssuing(false);
     }
@@ -517,6 +554,7 @@ function CardsSection({
   return (
     <section className="mb-10">
       <SectionHeader n="03" title="Disposable cards" aside="one per purchase · destroyed after use" />
+      {err && <SectionNotice message={err} onRetry={refresh} />}
       <p className="text-sm text-ink-muted max-w-[46rem] mb-5">
         Card numbers are never stored — <em>Reveal</em> fetches them live from the
         issuer. Each card&apos;s limit is pinned to its purchase.
@@ -543,7 +581,7 @@ function CardsSection({
       {cards && cards.length > 0 && (
         <div ref={gridRef} className="grid gap-6 sm:grid-cols-2">
           {cards.map((c) => (
-            <CardView key={c.id} card={c} onChanged={refresh} onError={onError} />
+            <CardView key={c.id} card={c} onChanged={refresh} onError={setErr} />
           ))}
         </div>
       )}
@@ -560,41 +598,50 @@ const EXEC_TONE: Record<string, "success" | "warning" | "neutral" | "danger"> = 
   failed: "danger",
 };
 
-function ExecutionLog({
-  onError,
-  onExecuted,
-}: {
-  onError: (e: string) => void;
-  onExecuted: (n: number) => void;
-}) {
+function ExecutionLog({ onExecuted }: { onExecuted: (n: number) => void }) {
   const [actions, setActions] = useState<PayAction[] | null>(null);
   const [shots, setShots] = useState<Record<string, string[]>>({});
+  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.listPayActions().then(
       (a) => {
         const cardActions = a.filter((x) => x.metadata?.rail === "card");
         setActions(cardActions);
+        setErr(null);
         onExecuted(cardActions.filter((x) => x.status === "executed").length);
       },
-      (err) => onError(err instanceof Error ? err.message : String(err))
+      (e) => setErr(e instanceof Error ? e.message : String(e))
     );
-  }, [onError, onExecuted]);
+  }, [onExecuted]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   async function loadShots(a: PayAction) {
     const paths = (a.metadata?.checkout_screenshots as string[]) ?? [];
     try {
       const urls = await Promise.all(paths.map((p) => api.screenshotUrl("checkout", p)));
       setShots((prev) => ({ ...prev, [a.id]: urls }));
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     }
   }
 
+  if (err && !actions) {
+    return (
+      <section>
+        <SectionHeader n="04" title="Execution log" aside="card-rail purchases + audit trail" />
+        <SectionNotice message={err} onRetry={load} />
+      </section>
+    );
+  }
   if (!actions) return null;
   return (
     <section>
       <SectionHeader n="04" title="Execution log" aside="card-rail purchases + audit trail" />
+      {err && <SectionNotice message={err} onRetry={load} />}
       {actions.length === 0 && <p className="text-ink-subtle text-sm">No card purchases yet.</p>}
       <div className="grid gap-3">
         {actions.map((a) => {

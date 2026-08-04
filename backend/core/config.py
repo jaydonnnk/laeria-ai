@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # user that owns all monitored items/alerts. Create one in the dashboard
     # (Authentication -> Users -> Add user) and paste its id here.
     owner_user_id: str = ""
+    # Seconds to trust a previously-validated bearer token before re-checking
+    # it with Supabase. Bounded by the token's own expiry, so this can only
+    # shorten a session, never extend one. 0 disables caching.
+    auth_cache_seconds: int = 300
 
     # x402 — real protocol on Base Sepolia testnet (free faucet USDC).
     # Flip network to "eip155:8453" (Base mainnet) + fund the agent wallet
