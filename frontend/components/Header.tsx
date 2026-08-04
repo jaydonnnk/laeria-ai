@@ -7,7 +7,7 @@ import { supabase } from "../lib/supabase";
 import { cn } from "../lib/cn";
 
 const NAV = [
-  { href: "/decision", label: "What to buy" },
+  { href: "/decision", label: "Worth it?" },
   { href: "/research", label: "How it went" },
   { href: "/monitor", label: "Monitor" },
   { href: "/commerce", label: "Commerce" },

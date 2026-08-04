@@ -1,6 +1,6 @@
 "use client";
 
-// laeria — landing. Reddit purchase research is the lead story; the payment
+// laeria — landing. Reddit decision research is the lead story; the payment
 // lifecycle is the payoff, not the pitch. The page reads as a thread being
 // mined down to a verdict, then acted on under a mandate.
 
@@ -70,16 +70,16 @@ const MINED = [
 const MODES = [
   {
     href: "/decision",
-    label: "What to buy",
-    line: "Ask a purchase question.",
-    body: "The agent identifies the communities that actually own the thing, reads the threads, and returns the consensus pick with the red flags and the alternatives attached.",
+    label: "Worth it?",
+    line: "Ask before you commit.",
+    body: "A purchase, a procedure, a job, a move. The agent identifies the communities that would actually know, reads the threads, and returns the consensus with the red flags and the alternatives attached.",
     meta: "reads threads → verdict",
   },
   {
     href: "/research",
     label: "How it went",
     line: "Find the people who came back.",
-    body: "Follow-up posts from buyers six months and three years later — the update threads where the honeymoon wore off and the real failure modes showed up.",
+    body: "Follow-up posts from people six months and three years on — the update threads where the honeymoon wore off and the real failure modes showed up.",
     meta: "mines update posts",
   },
   {
@@ -376,7 +376,7 @@ export default function Landing() {
         <div className="hero-copy relative z-10 max-w-[1160px] mx-auto px-6 w-full">
           <div className="max-w-[640px]">
             <div className="hero-eyebrow eyebrow mb-5">
-              Purchase research · human signal, not marketing
+              Decision research · human signal, not marketing
             </div>
             <h1 className="text-[clamp(2.6rem,6vw,4.6rem)] leading-[1.02] font-semibold tracking-[-0.02em]">
               {HEAD_WORDS.map((w, i) => (
@@ -396,7 +396,7 @@ export default function Landing() {
                 href="/decision"
                 className="inline-flex items-center gap-2 whitespace-nowrap bg-accent text-accent-ink font-medium text-sm px-5 py-2.5 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-xs"
               >
-                Ask what to buy
+                Ask what's worth it
                 <span aria-hidden>→</span>
               </Link>
               <Link
@@ -593,7 +593,7 @@ export default function Landing() {
         <div className="reveal max-w-[44rem] mb-10">
           <div className="eyebrow mb-4">Three questions</div>
           <h2 className="text-[clamp(1.7rem,3.8vw,2.6rem)] font-semibold tracking-[-0.02em] leading-[1.1]">
-            Before you buy, after you buy, and every month you still own it.
+            Before you commit, after you commit, and every month it's still yours.
           </h2>
         </div>
         <div className="reveal grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -713,14 +713,14 @@ export default function Landing() {
       <section className="cta-final relative pt-[10vh] pb-[16vh] max-w-[1160px] mx-auto px-6 text-center">
         <div className="eyebrow mb-4">Start with a question</div>
         <h2 className="text-[clamp(2.2rem,5vw,3.6rem)] font-semibold tracking-[-0.02em] mb-8">
-          What are you about to buy?
+          What are you about to commit to?
         </h2>
         <div className="flex items-center justify-center gap-3">
           <Link
             href="/decision"
             className="inline-flex items-center gap-2 bg-accent text-accent-ink font-medium px-6 py-3 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-sm"
           >
-            Ask what to buy <span aria-hidden>→</span>
+            Ask what's worth it <span aria-hidden>→</span>
           </Link>
           <Link href="/login" className="px-5 py-3 text-ink-muted hover:text-ink transition-colors">
             Sign in
@@ -731,7 +731,7 @@ export default function Landing() {
             laeria<span className="text-accent">.</span>
           </span>
           <span className="font-mono text-[11px] tracking-wide uppercase">
-            Reddit purchase research · agentic checkout · demo
+            Reddit decision research · agentic checkout · demo
           </span>
         </div>
       </section>

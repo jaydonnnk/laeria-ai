@@ -31,7 +31,7 @@ def state_path(site: str) -> Path:
     return AUTH_DIR / f"storage_state.{tag}.json"
 
 PAGES = [
-    ("/decision", "What to buy"),
+    ("/decision", "Worth it?"),
     ("/research", "How it went"),
     ("/monitor", "Monitor"),
     ("/commerce", "Commerce"),

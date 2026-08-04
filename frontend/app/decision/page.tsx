@@ -68,14 +68,15 @@ export default function DecisionPage() {
   return (
     <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">
       <div className="mb-8">
-        <div className="eyebrow mb-3">Reddit consensus</div>
+        <div className="eyebrow mb-3">Before you commit</div>
         <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
-          What to buy
+          Worth it?
         </h1>
         <p className="mt-3 text-ink-muted">
-          Describe a purchase. The agent reads real Reddit threads across
-          relevant communities and returns the honest consensus — not marketing,
-          not SEO spam.
+          Describe something you&apos;re weighing up — a purchase, a procedure, a
+          job, a move. The agent reads real Reddit threads across the
+          communities that would know, and returns the honest consensus. Not
+          marketing, not SEO spam.
         </p>
       </div>
 
@@ -85,7 +86,10 @@ export default function DecisionPage() {
             <Textarea
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder='e.g. "best budget mechanical keyboard for programming under $100"'
+              placeholder={
+                'e.g. "best budget mechanical keyboard under $100" · ' +
+                '"is LASIK worth it" · "should I do a bootcamp"'
+              }
               rows={2}
               required
               minLength={3}
@@ -95,7 +99,7 @@ export default function DecisionPage() {
             <Input
               value={context}
               onChange={(e) => setContext(e.target.value)}
-              placeholder="Budget, use case, constraints"
+              placeholder="Budget, constraints, your situation"
             />
           </Field>
           <Button type="submit" disabled={loading || !query.trim()} className="w-fit">
@@ -117,12 +121,15 @@ export default function DecisionPage() {
 
       {brief && brief.consensus_pick && brief.confidence !== "low" && (
         <Card className="mt-6 p-6 border-accent/30 bg-accent-soft">
-          <h3 className="font-semibold text-ink mb-1">Consensus is strong — let the agent buy it</h3>
+          <h3 className="font-semibold text-ink mb-1">
+            Consensus is strong — if it&apos;s something you can buy, the agent can
+          </h3>
           <p className="text-sm text-ink-muted mb-4">
-            The agent finds the pick on the store, selects the best available
-            match, mints a single-use card capped to the price, and checks out —
-            all under your mandate. Anything above your confirm threshold waits
-            for your approval instead of executing.
+            Only applies when the pick is a product. The agent finds it on the
+            store, selects the best available match, mints a single-use card
+            capped to the price, and checks out — all under your mandate.
+            Anything above your confirm threshold waits for your approval
+            instead of executing.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Button

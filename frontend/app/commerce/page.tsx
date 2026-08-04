@@ -79,7 +79,7 @@ export default function CommercePage() {
     await runSearch(q);
   }
 
-  // Handed a pick from "What to buy" (/commerce?q=…&auto=1): prefill, search,
+  // Handed a pick from "Worth it?" (/commerce?q=…&auto=1): prefill, search,
   // and — when auto — let the agent choose the best available match and
   // propose the purchase itself. The mandate still gates it: over-threshold
   // buys land in pending approval rather than executing.
@@ -188,7 +188,7 @@ export default function CommercePage() {
         <SectionHeader n="02" title="Discover" aside="agent scans the live storefront" />
         {handedPick && (
           <Banner tone="info" className="mb-4">
-            Carried over from <b>What to buy</b> — searching the store for{" "}
+            Carried over from <b>Worth it?</b> — searching the store for{" "}
             <span className="font-mono">{handedPick}</span>.
             {autoNote && <span className="block mt-1">{autoNote}</span>}
           </Banner>
