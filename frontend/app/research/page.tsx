@@ -15,6 +15,7 @@ export default function ResearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<OutcomeSummary | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
@@ -22,8 +23,11 @@ export default function ResearchPage() {
     setLoading(true);
     setError(null);
     setSummary(null);
+    setElapsed(0);
     try {
-      setSummary(await api.startRetrospective(decision.trim(), context.trim()));
+      setSummary(
+        await api.startRetrospective(decision.trim(), context.trim(), 8, setElapsed)
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -75,6 +79,7 @@ export default function ResearchPage() {
           Hunting retrospective posts across Reddit — the slowest mode, 2–4
           minutes. Searching outcome phrasings, classifying genuine reports,
           reading the strongest.
+          <span className="tnum ml-2 text-ink-subtle">{elapsed.toFixed(0)}s</span>
         </Banner>
       )}
       {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}

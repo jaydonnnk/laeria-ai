@@ -104,9 +104,50 @@ def capture(site: str) -> int:
     return 0
 
 
+def refresh(site: str) -> int:
+    """Renew an expired access token without another sign-in.
+
+    Supabase access tokens last about an hour, which is shorter than a working
+    session. The saved state carries a refresh token and supabase-js renews
+    automatically on page load, so loading one page headlessly and re-saving
+    is enough — no password, no prompt.
+    """
+    STATE_PATH = state_path(site)
+    if not STATE_PATH.exists():
+        print(f"no saved session for {site} — run without --refresh first")
+        return 1
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(storage_state=str(STATE_PATH))
+        page = context.new_page()
+        try:
+            page.goto(f"{site}/decision", wait_until="domcontentloaded", timeout=60_000)
+        except Exception as exc:  # noqa: BLE001
+            print(f"could not reach {site}: {exc}")
+            browser.close()
+            return 1
+        page.wait_for_timeout(6000)  # let the client exchange the refresh token
+        bounced = "/login" in page.url
+        context.storage_state(path=str(STATE_PATH))
+        browser.close()
+
+    if bounced:
+        print("refresh token is no longer valid — sign in again:")
+        print(f"  python -m scripts.save_login --site {site}")
+        return 1
+    print(f"refreshed {STATE_PATH.name}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--clear", action="store_true", help="delete saved sessions")
+    ap.add_argument(
+        "--refresh",
+        action="store_true",
+        help="renew an expired token using the saved refresh token (no sign-in)",
+    )
     ap.add_argument(
         "--site",
         default=LOCAL,
@@ -114,7 +155,11 @@ def main() -> int:
     )
     args = ap.parse_args()
     site = args.site.rstrip("/")
-    return clear(site) if args.clear else capture(site)
+    if args.clear:
+        return clear(site)
+    if args.refresh:
+        return refresh(site)
+    return capture(site)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,13 @@
 """Research routes — Mode 1 (retrospective) and Mode 2 (decision synthesis).
 
-Phase 1 runs Mode 2 synchronously: the request blocks for the full research
-loop (30-90s). FastAPI runs sync handlers in a threadpool, so this doesn't
-block the event loop. Async job + status polling is a later refinement.
+Two shapes for each mode:
+
+* Synchronous (`/decision`, `/retrospective`) — blocks for the whole research
+  loop. Fine locally and from scripts; Mode 1 runs 2-4 minutes and will 504
+  behind any normal proxy.
+* Job-based (`/decision/submit`, `/retrospective/submit`, `/jobs/{id}`) —
+  returns immediately with a job id to poll. This is what a browser should
+  use over the public internet.
 """
 
 from __future__ import annotations
@@ -77,7 +82,12 @@ def act_on_brief(req: ActOnBriefRequest) -> dict:
 
 @router.post("/retrospective")
 def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
-    """Mode 1 — outcome/update-post mining. Synchronous (2-4 minutes)."""
+    """Mode 1 — outcome/update-post mining. Synchronous (2-4 minutes).
+
+    Kept for local use and scripts. Over the public internet this exceeds
+    every common proxy timeout (Cloudflare cuts at 100s) — use the job
+    endpoints below instead.
+    """
     try:
         return ResearchAgent().mine_retrospectives(
             req.decision, req.context, thread_budget=req.thread_budget
@@ -85,3 +95,70 @@ def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
     except Exception as exc:  # noqa: BLE001
         logger.exception("retrospective mining failed")
         raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
+
+
+# ---- job-based variants -------------------------------------------------
+#
+# Research runs far longer than any proxy will hold a connection open, so the
+# request returns a job id and the client polls. See services/jobs.
+
+
+class JobAccepted(BaseModel):
+    job_id: str
+    status: str = "pending"
+
+
+@router.post("/decision/submit", status_code=202)
+def submit_decision(req: DecisionRequest) -> JobAccepted:
+    from services import jobs
+
+    query = f"{req.query} ({req.context})" if req.context else req.query
+    job_id = jobs.submit(
+        ResearchAgent().synthesise_decision,
+        query,
+        thread_budget=req.thread_budget,
+        label=f"decision: {req.query[:60]}",
+    )
+    return JobAccepted(job_id=job_id)
+
+
+@router.post("/retrospective/submit", status_code=202)
+def submit_retrospective(req: RetrospectiveRequest) -> JobAccepted:
+    from services import jobs
+
+    job_id = jobs.submit(
+        ResearchAgent().mine_retrospectives,
+        req.decision,
+        req.context,
+        thread_budget=req.thread_budget,
+        label=f"retrospective: {req.decision[:60]}",
+    )
+    return JobAccepted(job_id=job_id)
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    """Poll a submitted research job.
+
+    status is pending | running | done | error. `result` carries the brief or
+    summary once done; `error` carries the failure message. `elapsed_seconds`
+    is included so a client can show honest progress rather than a dead
+    spinner.
+    """
+    from services import jobs
+
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown or expired job")
+
+    result = job.get("result")
+    if hasattr(result, "model_dump"):
+        result = result.model_dump(mode="json")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "label": job.get("label", ""),
+        "elapsed_seconds": job.get("elapsed_seconds", 0),
+        "result": result,
+        "error": job.get("error"),
+    }

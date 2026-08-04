@@ -17,9 +17,16 @@ logger = get_logger(__name__)
 class LLMService:
     def __init__(self) -> None:
         settings = get_settings()
+        # An explicit timeout is not optional here. The SDK default is 600
+        # seconds, so a single stalled request — observed intermittently
+        # against OpenRouter on large synthesis calls — wedges the caller for
+        # ten minutes with no way to tell it apart from slow work. A bounded
+        # failure can be retried or degraded around; an unbounded one cannot.
         self._client = OpenAI(
             base_url=settings.openrouter_base_url,
             api_key=settings.openrouter_api_key,
+            timeout=float(settings.llm_timeout_seconds),
+            max_retries=2,
         )
         self._model = settings.openrouter_model
 

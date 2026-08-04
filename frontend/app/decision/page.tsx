@@ -27,6 +27,7 @@ export default function DecisionPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [brief, setBrief] = useState<ResearchBrief | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [actOutcome, setActOutcome] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
 
@@ -54,8 +55,9 @@ export default function DecisionPage() {
     setLoading(true);
     setError(null);
     setBrief(null);
+    setElapsed(0);
     try {
-      setBrief(await api.startDecision(query.trim(), context.trim()));
+      setBrief(await api.startDecision(query.trim(), context.trim(), 8, setElapsed));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -104,8 +106,9 @@ export default function DecisionPage() {
 
       {loading && (
         <Banner tone="info" className="mb-6">
-          Reading Reddit threads — 30–90 seconds. Identifying communities, pulling
-          threads, synthesising.
+          Reading Reddit threads — identifying communities, pulling threads,
+          synthesising.
+          <span className="tnum ml-2 text-ink-subtle">{elapsed.toFixed(0)}s</span>
         </Banner>
       )}
       {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}

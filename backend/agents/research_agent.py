@@ -11,6 +11,8 @@ Mode 2 pipeline (Phase 1):
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 from core.logging import get_logger
 from core.models import (
     ConfidenceLevel,
@@ -87,6 +89,66 @@ Rules — these are integrity constraints, not suggestions:
   confidence "low"."""
 
 
+# The integrity rules are identical for both halves — the split is purely to
+# halve wall time, and must not change what either half is allowed to claim.
+_SHARED_RULES = """
+Rules — these are integrity constraints, not suggestions:
+- Only claim what the provided threads actually support. Never invent products,
+  prices, or opinions not present in the excerpts.
+- Report positive and negative signal at the SAME evidentiary standard. Reddit
+  engagement skews toward warnings and drama; satisfied users are quieter but
+  present in comments — extract their signal too. Do not manufacture negatives
+  to seem rigorous, and do not pad strengths to seem balanced: report what is
+  actually there, in proportion.
+- Weight by upvotes: a [200 pts] comment outweighs five [2 pts] comments.
+  "[score hidden]" means the score isn't public yet (recent comment) — judge
+  those by content, don't treat them as zero-vote.
+- Sarcasm is common. "Oh yeah X is great, if you enjoy wasting money" is
+  negative signal."""
+
+_VERDICT_SYSTEM = (
+    """You synthesise Reddit discussions into an honest research brief for a \
+purchase/decision. You are working from real thread excerpts provided by the \
+user. Respond with JSON only, exactly this schema:
+
+{
+  "consensus_pick": "the single option the community most consistently recommends, with one sentence of why. Empty string if no clear consensus.",
+  "strengths": ["what real users consistently praise or are glad about, per the threads"],
+  "alternatives": ["other options repeatedly mentioned, each with a phrase of context"]
+}
+"""
+    + _SHARED_RULES
+    + """
+- If the threads simply don't answer the query, say so plainly in
+  consensus_pick ("The threads found don't clearly answer this")."""
+)
+
+_SCRUTINY_SYSTEM = (
+    """You audit Reddit discussions for what could go wrong with a \
+purchase/decision, and judge how trustworthy the signal is. You are working \
+from real thread excerpts provided by the user. Respond with JSON only, \
+exactly this schema:
+
+{
+  "failure_modes": ["known problems/ways this goes wrong, per the threads"],
+  "what_reviewers_miss": ["things these real users mention that review sites don't"],
+  "red_flags": ["warning signs: astroturfing suspicion, vendor problems, degrading quality"],
+  "confidence": "high" | "moderate" | "low",
+  "bias_notes": "one or two sentences on sample bias, shilling suspicion, or thin coverage"
+}
+"""
+    + _SHARED_RULES
+    + """
+- Be suspicious of coordinated praise: same product named with unusual polish
+  across unrelated threads, or praised only in low-score comments -> mention in
+  red_flags and lower confidence.
+- confidence: "high" needs multiple independent threads agreeing with strong
+  upvotes; "low" whenever threads are few, old, or contradictory. When in
+  doubt, choose lower. If the threads simply don't answer the query, set
+  confidence "low"."""
+)
+
+
 _CLASSIFY_SYSTEM = """You classify Reddit post titles. The user is researching \
 a decision and needs posts that are RETROSPECTIVE OUTCOME REPORTS — someone \
 who already made this (or a closely similar) decision reporting how it went.
@@ -138,12 +200,26 @@ class ResearchAgent:
 
     # ---- Mode 2 (Phase 1) ----
 
-    def synthesise_decision(self, query: str, thread_budget: int = 8) -> ResearchBrief:
+    def synthesise_decision(
+        self, query: str, thread_budget: int = 8, use_cache: bool = True
+    ) -> ResearchBrief:
         """Deep multi-subreddit research → structured consensus brief.
 
         thread_budget = full thread+comment fetches (the slow, paced part).
         8 threads ≈ 8 requests ≈ 15-20s of Reddit time plus 2 LLM calls.
+
+        Repeat queries are served from disk: the threads behind a settled
+        purchase question do not change hour to hour, and re-running costs ~20
+        paced Reddit requests plus two LLM calls for a byte-identical answer.
         """
+        from core.config import get_settings
+        from services import research_cache
+
+        ttl = get_settings().research_cache_seconds
+        if use_cache:
+            cached = research_cache.get(query, kind="decision", ttl_seconds=ttl)
+            if cached is not None:
+                return ResearchBrief.model_validate(cached)
         # 1. Identify where to look (LLM) — including 2-3 query phrasings,
         #    because Reddit search is literal keyword matching.
         plan = self._identify_subreddits(query)
@@ -193,7 +269,10 @@ class ResearchAgent:
             return _empty_brief(subreddits, "Threads found but none passed signal filters.")
 
         # 5. Synthesise (LLM).
-        return self._synthesise(query, filtered, subreddits)
+        brief = self._synthesise(query, filtered, subreddits)
+        if use_cache:
+            research_cache.put(query, brief.model_dump(mode="json"), kind="decision")
+        return brief
 
     # ---- internals ----
 
@@ -236,6 +315,8 @@ class ResearchAgent:
     def _synthesise(
         self, query: str, threads: list[RedditThread], subreddits: list[str]
     ) -> ResearchBrief:
+        from core.config import get_settings
+
         from agents.signal_analysis import analyse_threads
 
         threads, machine_warnings = analyse_threads(threads, self._llm)
@@ -246,13 +327,39 @@ class ResearchAgent:
             if machine_warnings
             else ""
         )
-        raw = self._llm.complete_json(
-            _SYNTHESIS_SYSTEM,
-            f"Research query: {query}\n\nThread excerpts:\n\n{corpus}{analysis_block}",
-            max_tokens=2000,
-        )
+        user_msg = f"Research query: {query}\n\nThread excerpts:\n\n{corpus}{analysis_block}"
+
+        # Output tokens dominate this call — measured at ~59s for one ~2000
+        # token JSON body, which was the single largest cost in a query. The
+        # schema splits cleanly in two halves that do not need each other, so
+        # they run concurrently and the wall time is the slower of the two
+        # rather than their sum.
+        #
+        # The split is chosen so `confidence` stays with `red_flags`: the
+        # prompt requires suspected astroturfing to LOWER confidence, so those
+        # two fields have to be decided by the same call.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            verdict_f = pool.submit(
+                self._llm.complete_json, _VERDICT_SYSTEM, user_msg, 1200
+            )
+            scrutiny_f = pool.submit(
+                self._llm.complete_json, _SCRUTINY_SYSTEM, user_msg, 1200
+            )
+            # Second bound, independent of the HTTP timeout: whatever goes
+            # wrong inside the client, a half cannot hold the whole brief
+            # hostage. Generous enough that a merely slow call still lands.
+            deadline = get_settings().llm_timeout_seconds + 30
+            raw: dict = {}
+            for fut, half in ((verdict_f, "verdict"), (scrutiny_f, "scrutiny")):
+                try:
+                    raw.update(fut.result(timeout=deadline))
+                except Exception as exc:  # noqa: BLE001
+                    # Half a brief beats no brief: a failed half leaves its
+                    # fields empty and the rest of the report still renders.
+                    logger.warning("%s half of synthesis failed: %s", half, exc)
+
         # Guard against a transient model flake: valid JSON with every field
-        # blank despite having real threads to work from. One retry.
+        # blank despite having real threads to work from. One retry, unsplit.
         if not any(
             raw.get(k)
             for k in ("consensus_pick", "strengths", "failure_modes",

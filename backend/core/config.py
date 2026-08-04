@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "anthropic/claude-sonnet-4.5"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Per-request ceiling. The OpenAI SDK defaults to 600s, which turns an
+    # intermittent stall into a ten-minute hang indistinguishable from slow
+    # work. Synthesis normally lands in 15-40s.
+    llm_timeout_seconds: int = 120
 
     # Reddit
     reddit_client_id: str = ""
@@ -41,6 +45,11 @@ class Settings(BaseSettings):
     # fetch can no longer be assumed. Demos should run "live_then_fixture".
     # See services/reddit_fixtures.py.
     reddit_source: str = "live_then_fixture"
+    # How long a completed research brief stays reusable. The threads behind a
+    # settled purchase question do not change hour to hour, and a repeat query
+    # otherwise costs ~20 paced Reddit requests plus two LLM calls to produce
+    # the same answer. 0 disables the cache.
+    research_cache_seconds: int = 86_400
 
     # Obsidian
     obsidian_api_url: str = "https://127.0.0.1:27124"

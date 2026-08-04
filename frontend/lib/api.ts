@@ -60,6 +60,54 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+interface JobState<T> {
+  job_id: string;
+  status: "pending" | "running" | "done" | "error";
+  elapsed_seconds: number;
+  result: T | null;
+  error: string | null;
+}
+
+const POLL_INTERVAL_MS = 1500;
+// Generous: Mode 1 legitimately runs 2-4 minutes. This only bounds a job that
+// has stopped reporting, so it is a backstop rather than a deadline.
+const POLL_TIMEOUT_MS = 8 * 60 * 1000;
+
+/** Submit long research and poll until it finishes.
+ *
+ *  The work outlives any single HTTP request — Cloudflare cuts at 100s — so
+ *  the server hands back a job id immediately and progress is polled.
+ *  onProgress receives elapsed seconds so the UI can show real progress
+ *  instead of an indefinite spinner. */
+async function runJob<T>(
+  submitPath: string,
+  body: unknown,
+  onProgress?: (seconds: number) => void
+): Promise<T> {
+  const { job_id } = await request<{ job_id: string }>(submitPath, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const job = await request<JobState<T>>(`/research/jobs/${job_id}`);
+    onProgress?.(job.elapsed_seconds);
+
+    if (job.status === "done") {
+      if (job.result === null) throw new Error("job finished with no result");
+      return job.result;
+    }
+    if (job.status === "error") {
+      throw new Error(job.error ?? "research failed");
+    }
+    if (Date.now() > deadline) {
+      throw new Error("research is taking unusually long — it may still finish; try again shortly");
+    }
+  }
+}
+
 // Mirrors backend core/models.py SourceThread.
 export interface SourceThread {
   id: string;
@@ -109,12 +157,19 @@ export interface OutcomeSummary {
 export const api = {
   health: () => request<{ status: string }>("/health"),
 
-  // Mode 2 (Phase 1)
-  startDecision: (query: string, context = "", thread_budget = 8) =>
-    request<ResearchBrief>("/research/decision", {
-      method: "POST",
-      body: JSON.stringify({ query, context, thread_budget }),
-    }),
+  // Mode 2 (Phase 1). Job-based: research runs longer than any proxy will
+  // hold a connection open, so submit + poll rather than one long request.
+  startDecision: (
+    query: string,
+    context = "",
+    thread_budget = 8,
+    onProgress?: (seconds: number) => void
+  ) =>
+    runJob<ResearchBrief>(
+      "/research/decision/submit",
+      { query, context, thread_budget },
+      onProgress
+    ),
 
   // Mode 2 trigger: act on a strong brief
   actOnBrief: (p: { query: string; consensus_pick: string; confidence: string }) =>
@@ -123,12 +178,19 @@ export const api = {
       body: JSON.stringify(p),
     }),
 
-  // Mode 1 (Phase 2)
-  startRetrospective: (decision: string, context = "", thread_budget = 8) =>
-    request<OutcomeSummary>("/research/retrospective", {
-      method: "POST",
-      body: JSON.stringify({ decision, context, thread_budget }),
-    }),
+  // Mode 1 (Phase 2). Runs 2-4 minutes, so job-based is not optional here —
+  // the synchronous route 504s behind any normal proxy.
+  startRetrospective: (
+    decision: string,
+    context = "",
+    thread_budget = 8,
+    onProgress?: (seconds: number) => void
+  ) =>
+    runJob<OutcomeSummary>(
+      "/research/retrospective/submit",
+      { decision, context, thread_budget },
+      onProgress
+    ),
 
   // Mode 3 (Phase 3)
   listMonitoredItems: () => request<MonitoredItem[]>("/monitor/items"),
