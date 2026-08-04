@@ -56,3 +56,4 @@ backend/usage_stats.json
 backend/screenshots/
 
 # Windows SAC workaround — pure-python bitarray lives only in the laptop venv
+.next-check/
