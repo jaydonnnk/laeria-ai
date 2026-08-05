@@ -1,86 +1,104 @@
 # Session Transfer
 
+Session of 2026-08-03 → 08-06. Started at `d08a6b4`, ends at `fa1a6c3` (13 commits, ~4,400 lines excluding fixtures). Synced — local and origin/master match.
+
 ## Completed
 
-- **Renamed the project baryon.ai → laeria.ai** — code, docs, config, systemd unit, and the folder itself (`Desktop\baryon.ai` → `Desktop\laeria.ai`). The venv survived the move intact; the GitHub repo was renamed to `jaydonnnk/laeria-ai` and the git remote updated.
-- **Deployed the backend** to Render (Docker, Playwright-capable): `https://laeria-ai-backend.onrender.com` — `/health` returns 200, all routes load, auth gate returns 401 unauthenticated.
-- **Built the entire frontend UI from scratch** (it was previously unstyled inline-style scaffolding): a light-mode "Precision Instrument" design system on Tailwind v4 + IBM Plex Sans/Mono + GSAP/Lenis, applied across all 7 pages plus `CardView` and `Sources`.
-- **Built a cinematic scroll-film landing** at `/` using a Higgsfield-generated hero image, with a jade light-sweep, mandate thesis, Reddit-research scene, pinned lifecycle, a REFUSED beat, and CTAs into the app.
-- **Wired research into checkout**: "What to buy" hands its consensus pick to `/commerce`, which can auto-select the best available product and propose the card-rail purchase.
-- **Renamed the Reddit modes** to plain English (user-facing only): "Decision synthesis" → "What to buy", "Retrospective mining" → "How it went"; dropped "Mode 1/2/3" labels.
-- Ran an AI-slop audit on the new UI — came back clean (findings were scanner false positives or intentional design).
-- All work is committed **and pushed**: `aa2c604 → d08a6b4`, origin/master matches local.
+- **Adversarial review triaged and Phase A executed.** An external critique (`CRITIQUE.md`) was verified line by line against the code, then addressed per `docs/REMEDIATION_PLAN.md`. Two real mandate bypasses were closed: the approved amount never bounded a purchase (execution compared the live price against itself), and an unset spending cap meant *unlimited* rather than zero.
+- **Reddit shutoff survived.** Reddit announced on 2026-06-30 that logged-out `old.reddit.com` access ends within the month — the app's only data source. A record/replay layer at the HTTP boundary plus a captured 63-request corpus means the demo cannot 403 on stage. Live capture still worked when taken.
+- **Reddit Data API applied for and denied** (ticket 18183736, 2026-08-03), citing unspecified non-compliance and/or missing detail. No legal, durable data path exists.
+- **Landing rebuilt** to lead with Reddit research rather than the payment rail, then widened from purchases to decisions generally.
+- **Frontend deployed** — `https://laeria-ai.vercel.app`, all three `NEXT_PUBLIC_*` values verified correct by reading them out of the shipped bundle.
+- **All five authed pages verified with real data** for the first time, desktop and mobile, via a hand-captured browser session.
+- **Root cause found for intermittent request failures** that had appeared as CORS errors across three runs on different pages: stale pooled HTTP/2 connections to Supabase.
+- **Research made ~2x faster and cacheable**; long research moved off the HTTP request onto a job queue.
+- **Sign-up shipped and confirmed working end to end by the user**, with Google OAuth and email/password. Research modes are open to any signed-in account; payments remain owner-only.
 
 ## Decisions
 
-- **Tailwind v4 + hand-built primitives, not shadcn** — full design control and avoids shadcn's default look; the app needed a distinctive fintech identity, not a component-library default.
-- **IBM Plex Sans + Plex Mono, jade `#0B7A5B` on warm paper `#FAFAF8`** — chosen over the "safe SaaS" (Geist/indigo) and "editorial luxury" (Didone/bone) directions because both read as AI-template waves; Plex has engineering/fintech credibility and mono-for-all-numbers suits a payments product.
-- **Landing is a cinematic scroll-film; app pages are not** — a scroll-scrubbed film is wrong for surfaces you must operate (you can't scrub a checkout form). The wow lives on the landing; the console stays usable.
-- **Higgsfield still image + coded motion, not generated video** — the account is on the free plan with 3 credits; video needs 22.5 credits (or a paid plan for the cheaper models). The still + GSAP light-sweep is also more demo-reliable than video decode/loop.
-- **Backend on Render, not Vercel** — Vercel serverless cannot run Playwright/Chromium, which discovery and the checkout executor both require. Vercel remains the frontend host.
-- **Backend Docker image uses the real `bitarray`/`ckzg`/`regex` wheels** — the Windows SAC stubs are a local-only workaround; on Linux the native wheels install and work normally.
-- **"Buy the pick" is autonomous but mandate-gated** — the agent selects the product itself rather than making the user choose, restoring the original one-click research→payment beat, while the mandate/approval threshold still stops or parks over-limit buys.
+- **Mandate stays the policy layer; enforcement moves later.** Kite Agent Passport was investigated in depth and maps near 1:1 onto `ActionMandate` (`max_amount_per_tx`, `max_total_amount`, `ttl_seconds`, x402 `allowed_endpoints`). Deferred rather than integrated: its docs ship as Claude Skills + a `kpass` CLI (`github.com/gokite-ai/passport-skills`), the model appears to be a *local* agent with browser approval rather than a hosted service acting for many users, and the Windows install is a plausible day-loss given Smart App Control history.
+- **Payments owner-only, research multi-user.** The agent wallet key, Stripe cardholder and storefront session are single global instances; data scoping cannot separate them, so only the auth level can.
+- **Corpus replay over a logged-in scraper.** Logged-in `old.reddit` would still work, but it is the exact behaviour Reddit's policy names and risks an account ban.
+- **Disclosed current scraping in the API application.** Concealing it would violate the policy outright and risk permanent revocation; the disclosure was probably decisive in the denial, and the same call would be made again.
+- **`/research` kept its name** while `/decision` became "Worth it?". Its copy was already decision-general and "How it went" is lifted verbatim from its own classifier prompt — renaming would have been churn.
+- **Fuji deprioritised.** Base Sepolia is the default network; Fuji was an Avalanche flourish and its faucet is the one genuinely needing a sponsor coupon.
+- **x402 payments are gasless for the payer** (EIP-3009, facilitator submits), so the agent's existing $19.94 USDC is enough. Only `wallet.fund_agent` needs gas — reframing faucets from blocking to optional.
 
 ## Traps
 
-- **The Browser-pane screenshot tool (`mcp__Claude_Browser__computer` screenshot) hangs on this project — every time.** It timed out on first paint, and removing `animate-ping` and `backdrop-blur` did not fix it; `get_page_text` and `read_console_messages` work fine. Do not keep retrying it or keep "fixing" the page to satisfy it. Screenshot via Playwright from the backend venv instead — that path is reliable and was used for every visual check.
-- **`preview_start` cannot reach this project** — laeria.ai is a sibling of the session's working directory, so the preview tool errors on cwd. Run the dev server via background bash.
-- **Shopify's `.myshopify.com` subdomain is permanent** — the store URL stays `baryon-ai.myshopify.com` forever despite the rename. Changing it in `SHOP_STORE_URL` or `demo_e2e.py:102` breaks discovery and checkout. The rename sed was deliberately written to avoid matching `baryon-ai`.
-- **Windows Smart App Control keeps blocking new native DLLs** — it now blocks `bitarray`, `ckzg`, and `regex`; `ckzg` breaks `import eth_account` outright. Stubs live in `infra/*_stub/`. Any `pip install` touching those three re-breaks wallet/x402 signing.
-- **`NEXT_PUBLIC_*` vars are inlined at build time** — a Vercel build without them produces a working build with broken auth. The Supabase client now falls back to a valid placeholder so the build can't crash, which means a green build no longer proves the env is correct.
-- **The free-plan credit ceiling is easy to hit** — two hero images consumed most of the balance. Preflight with `get_cost` before any generation.
-- **The Claude Code harness crashed once** ("agent process failed to restart after 5 consecutive crashes") mid-session while the dev server was healthy; nothing in the app caused it. Work on disk was unaffected.
+- **Binding a user in a FastAPI dependency does not work.** A ContextVar set there never reaches the endpoint — every threadpool dispatch copies the context. Unit tests that call the dependency and the repository in one context confirm the wrong thing and pass. Verified empirically: the endpoint reads the default. `BaseHTTPMiddleware` is equally unusable, raising *"Token was created in a different Context"*. Only raw ASGI middleware works. The temptation is to "fix" the reset; the propagation is what is broken.
+- **`npx next build` while the dev server runs clobbers `.next`** and every page 404s on `/_next/static/*`. This produced three false 0/10 verification runs before being fixed. `npm run build:check` now writes elsewhere; the temptation is to assume the app broke.
+- **`networkidle` never settles on a deployed Next app** (RSC prefetch keeps chattering). It timed out at 60s on a page that loads in 0.3s. The temptation is to treat the timeout as a real failure.
+- **Automated page checks pass on functionally broken pages.** Mobile nav was entirely missing and scored 10/10 — no console errors, no failed requests, plenty of text. Screenshots caught it; the checks never would.
+- **Never call an authenticated endpoint without a session.** `api.request()` force-redirects to `/login` on 401, so a `/me` call in `Header` — whose hooks run even when it returns `null` — threw every signed-out visitor off the landing page.
+- **The OpenAI SDK defaults to a 600s timeout.** An intermittent stall left a job "running" indefinitely, indistinguishable from slow work. Diagnosed only via a thread dump.
+- **Playwright fails from PowerShell** with `WinError 5` on the node driver, while succeeding from Git Bash. Fourth thing Smart App Control has broken here, after `bitarray`, `ckzg`, `regex`.
+- **`save_login --refresh` used to report success over a still-expired token.** Supabase access tokens last ~1h, shorter than a working session; it now verifies the token it produced.
 
 ## Working Agreements
 
-- The user reviews visually and approves in stages: a snippet/screenshot is shown, they approve or redirect, and only then does the full build proceed. They rejected the first UI pass as "mundane" — plain-but-clean is not sufficient; they want visible craft.
-- The user pushes via a GUI **Sync** button; commits should be left ready to sync rather than pushed unprompted, and commit messages are written so "press sync" is the only remaining step.
-- Commits must not add Claude as co-author (explicitly requested).
-- The user asks probing questions when something seems to have silently changed ("what happened to the Reddit feature?", "what happens to the agentic payment?") — surfacing removed or demoted behaviour proactively matters more than assuming the change was fine.
-- The user asked that `.env` files never be read; a global permission deny rule was added to `~/.claude/settings.json` covering `.env`, `.env.local`, `.env.*.local` for the Read tool plus common Bash readers.
-- Naming should stay plain — grandiose feature names were explicitly rejected.
+- The user asks "is this feasible?" and "confirm with me first" before build-heavy work, and expects an assessment with tradeoffs rather than an immediate start. Approval is explicit and per-item.
+- Commits are left ready for a GUI **Sync** button, never pushed. Claude must not be added as co-author.
+- The user reallocates work explicitly ("I WON'T be doing 2-4") and expects the list to be re-scoped without argument — one flag on the risk, then move on.
+- Corrections are wanted plainly. When a claim is wrong, the expectation is to say so and move, not to hedge.
+- Loaded language about the user's own project is unwelcome in the repo (`CRITIQUE.md`'s "it's stolen" was reworded on request).
+- The user pushes back on over-narrow scoping ("not every query is a purchase") and expects the underlying code to be checked before renaming.
 
 ## Files Changed
 
-Frontend, `e5c1895..d08a6b4` (28 files, +3067/−1243):
+Backend:
+- `core/current_user.py:1-95` — new. ContextVar + `CurrentUserMiddleware` (raw ASGI). Docstring records why dependency and BaseHTTPMiddleware binding both fail.
+- `core/auth.py:88-160` — split into `_validate` / `peek_user_id` / `require_user` / `require_owner`; token-validation cache bounded by the token's own `exp`.
+- `db/repositories.py:22-35` — `_owner()` now resolves to the request's user; the 17 call sites are untouched.
+- `db/client.py:1-100` — 5s keepalive expiry and a transport that replays a dead pooled connection **for GET/HEAD/OPTIONS only**, so a dropped write can't duplicate.
+- `api/routes/actions.py:134-250` — approved-amount clamp with re-park on price drift, on both rails; `None` caps in headroom math; live vendor re-check.
+- `api/routes/research.py:57-155` — `/act` gated to owner; `/decision/submit`, `/retrospective/submit`, `/jobs/{id}`.
+- `agents/research_agent.py` — synthesis split into two parallel calls (`_VERDICT_SYSTEM` / `_SCRUTINY_SYSTEM`, `confidence` deliberately kept with `red_flags`); cache read/write; plan caching for replay.
+- `services/reddit.py:105-190`, `services/reddit_fixtures.py` — record/replay incl. recorded failures.
+- `services/jobs.py`, `services/research_cache.py` — new.
+- `services/llm.py:17-31` — explicit 120s timeout.
+- `services/payment.py:88-135`, `services/bazaar.py:23-35` — mainnet signing off unless `X402_ALLOW_MAINNET`.
+- `core/models.py:121-136` — mandate caps are `float | None`; unset means zero allowance.
+- `scripts/{save_login,verify_pages,capture_corpus}.py` — new tooling.
+- `tests/{test_mandate,test_auth_cache,test_tenancy}.py` — 41 tests. Tenancy tests drive the real app through `TestClient` deliberately.
 
-- `frontend/app/globals.css:1-119` — new: Tailwind v4 `@theme` token block (paper/ink/jade/semantic colors, radii, shadows), `.tnum` and `.eyebrow` utilities, `[data-anim]` pre-paint hiding, reduced-motion overrides.
-- `frontend/app/layout.tsx:1-31` — next/font IBM Plex Sans + Mono wired to CSS vars, globals import, `<Header/>` mounted.
-- `frontend/app/page.tsx:1-416` — replaced the old link-list home with the cinematic landing: GSAP/Lenis setup and cleanup (`:29-155`), hero with generated plate + light sweep (`:171-232`), thesis, Reddit-research scene (`:253-290`), pinned lifecycle, REFUSED beat, CTA.
-- `frontend/app/commerce/page.tsx` — full rebuild: lifecycle-state derivation feeding `Stepper` (`:44-70`), `runSearch` returning products plus the `?q=`/`?auto=1` handoff effect (`:72-125`), `ProductRow` with verify/buy and screenshot reveal, `FundingSection` with count-up balances, `MandateSummary`, `CardsSection` with deal-in, `ExecutionLog` with audit screenshots.
-- `frontend/app/decision/page.tsx` — retitled "What to buy"; added `searchSeed()` and the three-action consensus block: "Buy the pick →" (`&auto=1`), "Browse the store first", and the original x402 payment demoted to secondary.
-- `frontend/app/actions/page.tsx`, `monitor/page.tsx`, `research/page.tsx`, `login/page.tsx` — rebuilt on the primitives; data flow and API calls unchanged.
-- `frontend/components/ui/{Button,Card,Badge,Stat,Input,Banner}.tsx` — new primitives; `Button` forwards refs (needed as the shake target), `Stat` count-up is reduced-motion safe.
-- `frontend/components/{Header,PageShell}.tsx`, `components/commerce/Stepper.tsx` — new app chrome and the lifecycle rail; `Header` hides itself on `/` and `/login`.
-- `frontend/lib/motion.ts:1-86` — new: `prefersReducedMotion`, `revealStagger`, `countUp`, `shake`, `dealIn`.
-- `frontend/lib/supabase.ts:1-27` — `safeUrl()` guard so a missing or malformed `NEXT_PUBLIC_SUPABASE_URL` falls back to a valid placeholder instead of throwing during prerender.
-- `frontend/public/hero-rail.png`, `hero-dial.png` — Higgsfield-generated instrument stills (rail is the hero; dial unused so far).
-- `backend/Dockerfile`, `backend/.dockerignore` — new: Playwright base image, `$PORT` binding for Render.
-- `infra/systemd/laeria-monitor.service` — renamed from `baryon-monitor.service`.
+Frontend:
+- `app/page.tsx` — landing rewritten (Reddit-led), then widened to decisions; `gate()` routes signed-out visitors to `/signup?next=`.
+- `app/signup/page.tsx`, `app/auth/callback/page.tsx`, `components/GoogleButton.tsx` — new.
+- `components/Header.tsx:24-60` — public-route guard around the `/me` call; owner-only nav filtering; mobile nav row.
+- `lib/api.ts:8-60,110-130` — retry for reads, `runJob` submit+poll, `me()`.
+- `app/commerce/page.tsx` — per-section error notices with retry, replacing one page-wide banner.
+- `next.config.js:1-21`, `package.json` — `build:check` writes to `.next-check`.
 
 ## Open Work
 
-- The authed app pages (`/commerce`, `/actions`, `/decision`, `/research`, `/monitor`) have **never been viewed rendered with real data** — they typecheck and the production build passes, but every visual check so far was on `/` and `/login`, the only two pages that render without a Supabase session. Verifying them depends on someone logging in; the password is not available to the agent.
-- The Decide→Commerce handoff is **untested end to end** for the same reason, and is further limited by the demo store containing only snowboards — a realistic consensus pick returns no matches and hits the empty state.
-- The frontend is **not deployed**. The Vercel import failed twice (missing env vars, then a malformed `NEXT_PUBLIC_SUPABASE_URL` — the values appeared swapped). Both failures are now guarded in code, but the env values on Vercel were never confirmed corrected and no successful frontend deploy exists. The backend deploy does not depend on this.
-- The deployed backend's **512MB Render free tier has not been tested against a real Playwright checkout** — the memory spike is the open risk; HF Spaces (16GB) was identified as the fallback.
-- Demo-day manual items remain unstarted: Base Sepolia gas faucet for the treasury (three faucets were blocked by anti-sybil gates), Fuji faucets, StraitsX sandbox access (requires business verification, expected to be obtained at the event), a recorded fallback video, and two dress rehearsals.
-- `hero-dial.png` is generated and committed but unused.
+- **Data source is unresolved and is the binding constraint.** The API application was denied; a reply to ticket 18183736 asking which element failed is drafted but unsent. Paid providers (Apify/Data365) resell the same scraping and remain unpriced. Diversifying to sources with real APIs (YouTube, Hacker News, Stack Exchange) is unexplored. Everything about the product's durability depends on this; the demo does not, because of the frozen corpus.
+- **Kite integration not started.** The cheap version (adding Kite as a network via `X402_EXTRA_NETWORKS`, funding from `faucet.gokite.ai`) is unblocked. Per-user passports depend on resolving whether a hosted service can hold passports on users' behalf.
+- **Faucets not done.** Both wallets show `0.000000 ETH gas`; treasury holds $0.06 USDC. This blocks only the live "Fund" step — the stepper already shows Fund complete from the agent's existing balance, and x402 payments need no gas.
+- **Backend changes since the last deploy are not live on Render** — the auth cache, connection fix, job endpoints, LLM timeout and multi-tenancy all require a redeploy.
+- **Background monitoring is owner-only.** `items_due_for_check()` filters by user and the worker runs unbound; a guest's on-demand "check now" works.
+- **`thread_embeddings` has no `user_id` and no RLS** — the one shared table, now that other accounts exist. It is also still write-only; nothing reads it.
+- **Demo-day items the user has declined:** fallback video and dress rehearsals. Demo day would be the first full run.
+- **StraitsX sandbox** needs business verification, expected at the event.
 
 ---
 
 ## Prompt for New Chat
 
-This continues work on **laeria.ai** (formerly baryon.ai) at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — a personal agent that researches purchases on Reddit and pays for them under a spending mandate. It is the submission for an agentic-payments hackathon (SMU, Aug 14–16 2026; sponsors StraitsX, Avalanche, Kite).
+This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and can complete purchases under a spending mandate. It is the submission for an agentic-payments hackathon (SMU, 14–16 August 2026; sponsors StraitsX, Avalanche, Kite).
 
-The backend and full payment lifecycle were already complete before this session: funding, storefront discovery, disposable card issuance, Playwright checkout, and mandate enforcement. Precisely: the lifecycle runs end to end against the demo storefront, but the **merchant charge is simulated** — under the default `bogus` gateway profile Shopify receives its Bogus Gateway magic PAN and a matching authorization is then created on the real issued card via `stripe.test_helpers`. The card and its authorization are real; no money has moved through a card network. See the README's "What is real, and what is a demo composite". This session did three things: renamed the project baryon.ai → laeria.ai everywhere including the folder and the GitHub repo, deployed the backend to Render at `https://laeria-ai-backend.onrender.com`, and built the entire frontend UI, which previously had no design at all.
+Frontend is live at `https://laeria-ai.vercel.app`; backend at `https://laeria-ai-backend.onrender.com`. Everything is committed and synced at `fa1a6c3`. 41 backend tests pass and the production build is clean.
 
-The UI is a light-mode "Precision Instrument" system: Tailwind v4 design tokens, IBM Plex Sans and Plex Mono (mono for every number, balance, address, and card field), a jade `#0B7A5B` accent on warm paper `#FAFAF8`, hairline borders, and GSAP/Lenis motion that is reduced-motion gated throughout. The landing at `/` is a cinematic scroll-film built around a Higgsfield-generated instrument photograph and ends by leading into the console. All seven pages, plus `CardView` and `Sources`, were rebuilt on shared primitives in `components/ui/`; the API layer and data flow were left unchanged. "What to buy" (formerly "Decision synthesis") can hand its consensus pick to `/commerce`, where the agent selects a product itself and proposes a mandate-gated card purchase.
+The last session responded to an adversarial code review (`CRITIQUE.md`, plan in `docs/REMEDIATION_PLAN.md`). Two mandate bypasses are closed: the approved amount now bounds a purchase and re-parks for approval if the live price drifts past tolerance, and an unset spending cap now means zero allowance rather than unlimited. Base mainnet signing is off unless explicitly enabled. Research is cached and ~2x faster, long research runs as a polled job rather than inside the HTTP request, and sign-up is live with Google and email/password — the user has confirmed both work.
 
-Everything is committed and pushed; origin/master is at `d08a6b4`. TypeScript is clean and the production build passes all ten routes.
+Research modes are open to any signed-in account; `/commerce`, `/actions`, `/wallet`, `/store`, `/obsidian` and `/research/act` are owner-only, because the agent wallet key, Stripe cardholder and storefront session are single global instances that data scoping cannot separate.
 
-Two environment constraints matter before any verification or asset work. The Browser-pane screenshot tool hangs on this project every single time and is not worth retrying — Playwright from the backend venv is the working path, and `preview_start` cannot reach this directory because it is a sibling of the session cwd. The Higgsfield account is on the free plan with roughly 3 credits remaining, so generated video is out of reach; `get_cost` preflights are cheap.
+The binding constraint is the data source. Reddit is closing logged-out `old.reddit.com` access, which is the app's only input, and a Data API application was denied on 2026-08-03. A frozen 63-request corpus (`REDDIT_SOURCE=live_then_fixture`) means the demo cannot fail on stage, but no legal durable source exists.
 
-The frontend has no successful deploy yet, and the authed pages have not been seen rendered with real data because that requires a Supabase login the agent does not have.
+Several environment facts cost real time last session. A ContextVar set inside a FastAPI dependency never reaches the endpoint, so per-request user binding lives in raw ASGI middleware — `BaseHTTPMiddleware` raises "Token was created in a different Context". Running `npx next build` while the dev server is up clobbers `.next` and makes every page 404 on static chunks; `npm run build:check` exists to avoid that. Playwright works from Git Bash but fails from PowerShell with `WinError 5`. Supabase access tokens expire in about an hour, and `python -m scripts.save_login --refresh` renews a saved session without another sign-in.
+
+Automated page checks have twice passed on functionally broken pages, so `scripts/verify_pages.py` writes screenshots that are worth looking at rather than trusting the score.
+
+Kite Agent Passport was researched but not integrated; its delegation schema maps closely onto the existing `ActionMandate`. Faucets remain undone, which affects only the live "Fund" demo step. The user has declined to record a fallback video or run dress rehearsals.
 
 Wait for instructions before taking any action.
