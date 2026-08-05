@@ -46,6 +46,12 @@ class FakeSupabase:
         self.auth = FakeAuth(uid)
 
 
+def authed(header: str, dep=None):
+    """require_user validates and returns the id; require_owner then decides."""
+    uid = auth.require_user(header)
+    return dep(uid) if dep else uid
+
+
 @pytest.fixture(autouse=True)
 def clean():
     auth.clear_auth_cache()
@@ -73,15 +79,15 @@ def wired(monkeypatch):
 def test_second_call_is_served_from_cache(wired):
     fake, _ = wired
     tok = make_token()
-    assert auth.require_owner(f"Bearer {tok}") == "owner-uuid"
-    assert auth.require_owner(f"Bearer {tok}") == "owner-uuid"
+    assert authed(f"Bearer {tok}") == "owner-uuid"
+    assert authed(f"Bearer {tok}") == "owner-uuid"
     assert fake.auth.calls == 1, "second request should not re-hit Supabase"
 
 
 def test_different_tokens_are_cached_separately(wired):
     fake, _ = wired
-    auth.require_owner(f"Bearer {make_token(sub='a')}")
-    auth.require_owner(f"Bearer {make_token(sub='b')}")
+    authed(f"Bearer {make_token(sub='a')}")
+    authed(f"Bearer {make_token(sub='b')}")
     assert fake.auth.calls == 2
 
 
@@ -89,7 +95,7 @@ def test_cache_never_outlives_the_token(wired):
     """A token expiring in 2s must not be trusted for the full 300s TTL."""
     fake, _ = wired
     tok = make_token(exp_offset=2.0)
-    auth.require_owner(f"Bearer {tok}")
+    authed(f"Bearer {tok}")
     key = list(auth._cache.keys())[0]
     _, expires_at = auth._cache[key]
     assert expires_at - time.monotonic() <= 2.5, "TTL must clamp to token exp"
@@ -98,24 +104,29 @@ def test_cache_never_outlives_the_token(wired):
 def test_already_expired_token_is_not_cached(wired):
     fake, _ = wired
     tok = make_token(exp_offset=-1.0)
-    auth.require_owner(f"Bearer {tok}")
+    authed(f"Bearer {tok}")
     assert not auth._cache, "an expired token must never enter the cache"
 
 
-def test_rejection_is_not_cached(wired, monkeypatch):
-    """A token for the wrong user must be re-checked, never remembered."""
-    fake, settings = wired
+def test_caching_validation_never_grants_authorization(wired):
+    """The cache remembers WHO a token belongs to, never WHAT they may do.
+
+    Since the require_user/require_owner split, validation is cached but
+    authorization is decided per call. A non-owner's token is cached like
+    anyone else's and must still be refused by require_owner every time —
+    otherwise a cache hit would quietly become a permission grant.
+    """
+    fake, _ = wired
     fake.auth.uid = "someone-else"
     tok = make_token()
-    with pytest.raises(HTTPException) as e1:
-        auth.require_owner(f"Bearer {tok}")
-    assert e1.value.status_code == 403
-    assert not auth._cache
 
-    # once the same token resolves to the owner, it works — proving the
-    # earlier failure left nothing poisoned behind
-    fake.auth.uid = "owner-uuid"
-    assert auth.require_owner(f"Bearer {tok}") == "owner-uuid"
+    for _ in range(3):
+        with pytest.raises(HTTPException) as e:
+            authed(f"Bearer {tok}", dep=auth.require_owner)
+        assert e.value.status_code == 403
+
+    # the same cached token is still valid for user-level access
+    assert authed(f"Bearer {tok}") == "someone-else"
 
 
 def test_validation_error_is_not_cached(wired):
@@ -126,14 +137,14 @@ def test_validation_error_is_not_cached(wired):
 
     fake.auth.get_user = boom
     with pytest.raises(HTTPException) as e:
-        auth.require_owner(f"Bearer {make_token()}")
+        authed(f"Bearer {make_token()}")
     assert e.value.status_code == 401
     assert not auth._cache
 
 
 def test_missing_token_still_401(wired):
     with pytest.raises(HTTPException) as e:
-        auth.require_owner("")
+        authed("")
     assert e.value.status_code == 401
 
 
@@ -141,13 +152,13 @@ def test_ttl_zero_disables_caching(wired):
     fake, settings = wired
     settings.auth_cache_seconds = 0
     tok = make_token()
-    auth.require_owner(f"Bearer {tok}")
-    auth.require_owner(f"Bearer {tok}")
+    authed(f"Bearer {tok}")
+    authed(f"Bearer {tok}")
     assert fake.auth.calls == 2
     assert not auth._cache
 
 
 def test_cache_is_bounded(wired):
     for i in range(auth._MAX_ENTRIES + 5):
-        auth.require_owner(f"Bearer {make_token(sub=f'u{i}')}")
+        authed(f"Bearer {make_token(sub=f'u{i}')}")
     assert len(auth._cache) <= auth._MAX_ENTRIES

@@ -157,6 +157,10 @@ export interface OutcomeSummary {
 export const api = {
   health: () => request<{ status: string }>("/health"),
 
+  // Who am I, and may I use the payment features? is_owner cannot be derived
+  // client-side — OWNER_USER_ID only exists in the backend env.
+  me: () => request<{ user_id: string; is_owner: boolean }>("/me"),
+
   // Mode 2 (Phase 1). Job-based: research runs longer than any proxy will
   // hold a connection open, so submit + poll rather than one long request.
   startDecision: (

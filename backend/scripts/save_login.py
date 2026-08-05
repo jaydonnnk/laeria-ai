@@ -19,6 +19,7 @@ it like a password; delete it when you are done (`--clear`).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -128,16 +129,52 @@ def refresh(site: str) -> int:
             browser.close()
             return 1
         page.wait_for_timeout(6000)  # let the client exchange the refresh token
-        bounced = "/login" in page.url
         context.storage_state(path=str(STATE_PATH))
         browser.close()
 
-    if bounced:
-        print("refresh token is no longer valid — sign in again:")
+    # Verify rather than assume. Not bouncing to /login is not evidence the
+    # exchange happened — the redirect may simply not have fired yet, and
+    # reporting success over a still-expired token sends the caller off
+    # debugging the wrong thing entirely.
+    remaining = _access_token_lifetime(STATE_PATH)
+    if remaining is None:
+        print("no access token in the saved state — sign in again:")
         print(f"  python -m scripts.save_login --site {site}")
         return 1
-    print(f"refreshed {STATE_PATH.name}")
+    if remaining <= 0:
+        print(f"token is still expired ({int(-remaining)}s ago) — the refresh "
+              "token is dead too. Sign in again:")
+        print(f"  python -m scripts.save_login --site {site}")
+        return 1
+
+    print(f"refreshed {STATE_PATH.name} — valid for another {int(remaining // 60)} min")
     return 0
+
+
+def _access_token_lifetime(path: Path) -> float | None:
+    """Seconds until the stored access token expires; negative if already
+    expired, None if there isn't one."""
+    import base64
+    import time as _time
+
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    for origin in state.get("origins", []):
+        for kv in origin.get("localStorage", []):
+            if "auth-token" not in kv.get("name", ""):
+                continue
+            try:
+                token = json.loads(kv["value"])["access_token"]
+                payload = token.split(".")[1]
+                payload += "=" * (-len(payload) % 4)
+                exp = json.loads(base64.urlsafe_b64decode(payload))["exp"]
+                return float(exp) - _time.time()
+            except Exception:  # noqa: BLE001
+                continue
+    return None
 
 
 def main() -> int:

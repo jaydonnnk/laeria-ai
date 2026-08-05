@@ -1,7 +1,13 @@
 """Request authentication — Supabase Auth JWT validation.
 
-Single-user mode: a request is valid only when it carries a Bearer token for
-THE owner user (OWNER_USER_ID).
+Two levels:
+
+* `require_user` — any signed-in account. Binds that account to the request so
+  every repository query scopes to them. Research and monitoring use this.
+* `require_owner` — the deployment owner only. Everything that spends money
+  uses this, because the agent wallet key, the Stripe cardholder and the
+  storefront session are single global instances that data scoping cannot
+  separate.
 
 Validation hits Supabase Auth, which costs a full network round trip. Measured
 against the deployed backend that put every API call at 1.3-3.7s before any
@@ -22,7 +28,7 @@ import json
 import threading
 import time
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from core.config import get_settings
 from core.logging import get_logger
@@ -79,13 +85,8 @@ def clear_auth_cache() -> None:
         _cache.clear()
 
 
-def require_owner(authorization: str = Header(default="")) -> str:
-    """FastAPI dependency: validate the Bearer token and require it to belong
-    to the configured owner. Returns the user id."""
-    settings = get_settings()
-    if not settings.owner_user_id:
-        raise HTTPException(status_code=500, detail="OWNER_USER_ID not configured")
-
+def _validate(authorization: str) -> str:
+    """Validate the Bearer token and return its user id. Never checks WHO."""
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(status_code=401, detail="missing bearer token")
@@ -104,13 +105,56 @@ def require_owner(authorization: str = Header(default="")) -> str:
         logger.info("token validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="invalid or expired token") from exc
 
-    if user is None or user.id != settings.owner_user_id:
-        raise HTTPException(status_code=403, detail="not the owner")
+    if user is None or not user.id:
+        raise HTTPException(status_code=401, detail="invalid or expired token")
 
     # Never outlive the token itself.
+    settings = get_settings()
     ttl = float(settings.auth_cache_seconds)
     exp = _token_exp(token)
     if exp is not None:
         ttl = min(ttl, max(exp - time.time(), 0.0))
     _cache_put(key, user.id, ttl)
     return user.id
+
+
+def peek_user_id(authorization: str) -> str | None:
+    """The token's user id, or None if there isn't a usable one.
+
+    Used by CurrentUserMiddleware to bind the caller before the request
+    reaches any handler. It never raises: rejecting a request is the
+    dependencies' job, and a middleware that 401'd would also 401 /health and
+    the x402 vendor routes, which are deliberately open.
+    """
+    try:
+        return _validate(authorization)
+    except HTTPException:
+        return None
+
+
+def require_user(authorization: str = Header(default="")) -> str:
+    """Any signed-in account. Used for the research modes, which are per-user
+    and touch nothing shared.
+
+    Binding for repository scoping happens in CurrentUserMiddleware, not here
+    — a ContextVar set inside a dependency never reaches the endpoint. This
+    only decides whether the request may proceed. Both call _validate, and the
+    auth cache makes the second call free.
+    """
+    return _validate(authorization)
+
+
+def require_owner(user_id: str = Depends(require_user)) -> str:
+    """The deployment owner only.
+
+    Guards everything that spends: the agent wallet private key, the Stripe
+    cardholder and the storefront session are single global instances, so a
+    second account acting on them would be spending the owner's money. Data
+    scoping alone does not separate those — this does.
+    """
+    if user_id != get_settings().owner_user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="payment features are limited to the deployment owner",
+        )
+    return user_id

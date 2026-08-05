@@ -1,9 +1,13 @@
 """Supabase table access for Mode 3 monitoring.
 
 Thin repository layer over the supabase client: every function is a direct
-table operation scoped to the owner user. The backend runs with the
+table operation scoped to the signed-in user. The backend runs with the
 service-role key (bypasses RLS), so user scoping here is the actual access
-control — keep the owner_user_id filter on every query.
+control — keep the _owner() filter on every query.
+
+_owner() returns whoever made the current request (see core.current_user), so
+two accounts never see each other's rows. Outside a request it falls back to
+OWNER_USER_ID, which is what the monitor worker and scripts rely on.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from core.config import get_settings
+from core.current_user import current_user_id
 from core.logging import get_logger
 from core.models import MonitorAlert, MonitoredItem, SignalLevel
 from db.client import get_supabase
@@ -20,13 +24,12 @@ logger = get_logger(__name__)
 
 
 def _owner() -> str:
-    owner = get_settings().owner_user_id
-    if not owner:
-        raise RuntimeError(
-            "OWNER_USER_ID is not set in .env — create a user in the Supabase "
-            "dashboard (Authentication -> Users) and paste its UUID."
-        )
-    return owner
+    """The user every query in this module is scoped to.
+
+    Named for history — it is the *current* user, not necessarily the
+    deployment owner. Kept as-is so the 17 call sites below stay untouched.
+    """
+    return current_user_id()
 
 
 # ---- monitored_items ----

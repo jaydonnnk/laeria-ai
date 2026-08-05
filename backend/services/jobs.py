@@ -18,6 +18,7 @@ instance that never ran the job.
 
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 import uuid
@@ -47,8 +48,16 @@ def _prune() -> None:
 
 
 def submit(fn: Callable[..., Any], *args: Any, label: str = "", **kwargs: Any) -> str:
-    """Start work in the background and return its job id."""
+    """Start work in the background and return its job id.
+
+    The submitting request's context is carried into the worker thread.
+    ThreadPoolExecutor does not propagate ContextVars, so without this a job
+    would run with no bound user and fall back to the owner — invisible today
+    because research writes no per-user rows, and a silent cross-user data
+    bug the moment it does.
+    """
     job_id = uuid.uuid4().hex[:16]
+    ctx = contextvars.copy_context()
     with _lock:
         _prune()
         _jobs[job_id] = {
@@ -69,7 +78,7 @@ def submit(fn: Callable[..., Any], *args: Any, label: str = "", **kwargs: Any) -
             job["status"] = "running"
             job["started_at"] = time.time()
         try:
-            value = fn(*args, **kwargs)
+            value = ctx.run(fn, *args, **kwargs)
             with _lock:
                 if job_id in _jobs:
                     _jobs[job_id].update(

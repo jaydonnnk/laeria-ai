@@ -4,8 +4,9 @@
 // lifecycle is the payoff, not the pitch. The page reads as a thread being
 // mined down to a verdict, then acted on under a mandate.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { supabase } from "../lib/supabase";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Lenis from "lenis";
@@ -139,6 +140,24 @@ function ThreadCard({
 
 export default function Landing() {
   const root = useRef<HTMLDivElement>(null);
+  // null while unknown. Every in-app link is gated on this: sending a
+  // signed-out visitor straight to /decision just bounces them off an empty
+  // page, which reads as the product being broken rather than as a login wall.
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive) setSignedIn(Boolean(data.session));
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Optimistic until known: a returning user shouldn't see a Sign up flash.
+  const gate = (path: string) =>
+    signedIn === false ? `/signup?next=${encodeURIComponent(path)}` : path;
 
   useEffect(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -328,12 +347,29 @@ export default function Landing() {
           <span className="font-mono font-medium tracking-tight text-ink pointer-events-auto">
             laeria<span className="text-accent">.</span>
           </span>
-          <Link
-            href="/login"
-            className="pointer-events-auto font-mono text-[12px] tracking-wide uppercase text-ink-muted hover:text-ink transition-colors"
-          >
-            Sign in →
-          </Link>
+          {signedIn ? (
+            <Link
+              href="/decision"
+              className="pointer-events-auto font-mono text-[12px] tracking-wide uppercase text-ink-muted hover:text-ink transition-colors"
+            >
+              Open console →
+            </Link>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Link
+                href="/signup"
+                className="pointer-events-auto font-mono text-[12px] tracking-wide uppercase text-ink bg-accent-soft px-3 py-1.5 rounded-[--radius-sm] hover:bg-accent hover:text-accent-ink transition-colors"
+              >
+                Sign up
+              </Link>
+              <Link
+                href="/login"
+                className="pointer-events-auto font-mono text-[12px] tracking-wide uppercase text-ink-muted hover:text-ink transition-colors px-2 py-1.5"
+              >
+                Sign in →
+              </Link>
+            </div>
+          )}
         </div>
       </div>
 
@@ -393,17 +429,17 @@ export default function Landing() {
             </p>
             <div className="hero-cta mt-8 flex items-center gap-3">
               <Link
-                href="/decision"
+                href={gate("/decision")}
                 className="inline-flex items-center gap-2 whitespace-nowrap bg-accent text-accent-ink font-medium text-sm px-5 py-2.5 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-xs"
               >
-                Ask what's worth it
+                Ask what&apos;s worth it
                 <span aria-hidden>→</span>
               </Link>
               <Link
-                href="/research"
+                href={gate("/research")}
                 className="text-sm text-ink-muted hover:text-ink transition-colors px-3 py-2.5"
               >
-                See how it went for other buyers
+                See how it went for other people
               </Link>
             </div>
           </div>
@@ -576,7 +612,7 @@ export default function Landing() {
                   ))}
                 </div>
                 <Link
-                  href="/decision"
+                  href={gate("/decision")}
                   className="verdict-line mt-4 inline-flex items-center gap-2 text-sm font-medium text-accent hover:text-accent-hover transition-colors"
                 >
                   Run this on your own purchase <span aria-hidden>→</span>
@@ -600,7 +636,7 @@ export default function Landing() {
           {MODES.map((m) => (
             <Link
               key={m.href}
-              href={m.href}
+              href={gate(m.href)}
               className="group bg-surface border border-hairline rounded-[--radius-lg] p-6 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all flex flex-col"
             >
               <div className="flex items-center justify-between mb-4">
@@ -717,7 +753,7 @@ export default function Landing() {
         </h2>
         <div className="flex items-center justify-center gap-3">
           <Link
-            href="/decision"
+            href={gate("/decision")}
             className="inline-flex items-center gap-2 bg-accent text-accent-ink font-medium px-6 py-3 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-sm"
           >
             Ask what's worth it <span aria-hidden>→</span>

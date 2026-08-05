@@ -12,10 +12,11 @@ Two shapes for each mode:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agents.research_agent import ResearchAgent
+from core.auth import require_owner
 from core.logging import get_logger
 from core.models import OutcomeSummary, ResearchBrief
 
@@ -54,12 +55,16 @@ class ActOnBriefRequest(BaseModel):
     confidence: str = Field(pattern="^(high|moderate|low)$")
 
 
-@router.post("/act")
+@router.post("/act", dependencies=[Depends(require_owner)])
 def act_on_brief(req: ActOnBriefRequest) -> dict:
     """The plan's core promise: consensus strong -> agent buys. Server-side
     integrity gate — refuses to act on weak research regardless of what the
     UI sends. The purchase itself goes through the same mandate/approval
-    pipeline as any other action."""
+    pipeline as any other action.
+
+    Owner-only despite living on the research router: this is the one research
+    endpoint that spends, and it spends from the single shared agent wallet.
+    """
     if req.confidence == "low":
         raise HTTPException(
             status_code=409,
