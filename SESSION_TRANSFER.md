@@ -16,7 +16,7 @@ Session of 2026-08-03 → 08-06. Started at `d08a6b4`, ends at `fa1a6c3` (13 com
 
 ## Decisions
 
-- **Mandate stays the policy layer; enforcement moves later.** Kite Agent Passport was investigated in depth and maps near 1:1 onto `ActionMandate` (`max_amount_per_tx`, `max_total_amount`, `ttl_seconds`, x402 `allowed_endpoints`). Deferred rather than integrated: its docs ship as Claude Skills + a `kpass` CLI (`github.com/gokite-ai/passport-skills`), the model appears to be a *local* agent with browser approval rather than a hosted service acting for many users, and the Windows install is a plausible day-loss given Smart App Control history.
+- **Mandate stays the policy layer; enforcement moves later.** (Superseded 2026-08-06: Kite is not a partner of this event — see Hackathon Spec.) Kite Agent Passport was investigated in depth and maps near 1:1 onto `ActionMandate` (`max_amount_per_tx`, `max_total_amount`, `ttl_seconds`, x402 `allowed_endpoints`). Deferred rather than integrated: its docs ship as Claude Skills + a `kpass` CLI (`github.com/gokite-ai/passport-skills`), the model appears to be a *local* agent with browser approval rather than a hosted service acting for many users, and the Windows install is a plausible day-loss given Smart App Control history.
 - **Payments owner-only, research multi-user.** The agent wallet key, Stripe cardholder and storefront session are single global instances; data scoping cannot separate them, so only the auth level can.
 - **Corpus replay over a logged-in scraper.** Logged-in `old.reddit` would still work, but it is the exact behaviour Reddit's policy names and risks an account ban.
 - **Disclosed current scraping in the API application.** Concealing it would violate the policy outright and risk permanent revocation; the disclosure was probably decisive in the denial, and the same call would be made again.
@@ -70,12 +70,34 @@ Frontend:
 - `app/commerce/page.tsx` — per-section error notices with retry, replacing one page-wide banner.
 - `next.config.js:1-21`, `package.json` — `build:check` writes to `.next-check`.
 
+## Hackathon Spec
+
+From the Luma listing (2026-08-06). The published problem statements land at the Friday 1830 brief and may narrow these.
+
+Four milestones, framed as the lifecycle of one payment:
+
+| Milestone | Spec | laeria today |
+|---|---|---|
+| Funding | Move SGD stablecoins (XSGD) into a KYC'd account | ✗ USDC on Base Sepolia; nothing knows XSGD exists |
+| Discovery | Agent receives a purchase instruction, scans an e-commerce site, locates the item | ✓ `StorefrontService.search_products` + `verify_product` |
+| Issuance | A disposable virtual card is dynamically issued to the agent | ✓ `services/cards.py`; card cancelled in `finally` |
+| Execution | The agent completes checkout using the virtual card | ✓ `services/checkout.py`, Playwright on Shopify |
+
+"Solutions will showcase $XSGD on Avalanche Network."
+
+Two readings that change the work:
+
+- **The x402 rail is not what is judged.** Read literally, XSGD/Avalanche is the *funding* leg — stablecoin into a KYC'd account that backs the card — and the card is what pays the merchant. The nearest existing code is `wallet.py`'s treasury→agent transfer, not the x402 payment path.
+- **Reddit research is not a milestone.** "Discovery" means scanning an e-commerce site. The consensus engine is a differentiator layered on top of the required flow, not a dependency of it — which makes the unresolved data source much less threatening to the submission than to the business.
+
+Open questions for the Friday booth, in priority order: is the XSGD demo on testnet or mainnet (mainnet XSGD on Avalanche C-Chain is `0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E`, and a mainnet demo means real money plus the `X402_ALLOW_MAINNET` guard); the XSGD Fuji contract address (no public deployment found); StraitsX sandbox base URL and auth scheme; card create / limit / cancel / PAN-retrieval endpoints; which Avalanche x402 facilitator is blessed, if not self-hosting `x402-rs`.
+
 ## Open Work
 
 - **Data source is unresolved and is the binding constraint.** The API application was denied; a reply to ticket 18183736 asking which element failed is drafted but unsent. Paid providers (Apify/Data365) resell the same scraping and remain unpriced. Diversifying to sources with real APIs (YouTube, Hacker News, Stack Exchange) is unexplored. Everything about the product's durability depends on this; the demo does not, because of the frozen corpus.
-- **Kite integration not started.** The cheap version (adding Kite as a network via `X402_EXTRA_NETWORKS`, funding from `faucet.gokite.ai`) is unblocked. Per-user passports depend on resolving whether a hosted service can hold passports on users' behalf.
+- **Kite is not a sponsor of this event and is descoped to a slide.** Verified 2026-08-06 against the Luma listing: partners are Avalanche (title), AWS (cloud), Convergence Summit, and SMU Fintech / SMU AI (venue), hosted by StraitsX. Kite appears nowhere. Two further findings from the docs: the `X402_EXTRA_NETWORKS` "cheap version" is not established — Kite's service-provider guide documents scheme `gokite-aa` on `kite-testnet` (chain 2368, facilitator `facilitator.pieverse.io`), while the code registers the standard `exact` scheme, and Coinbase's x402 network list does not include Kite. And per-user passports are ruled out rather than merely unverified: Kite's only hosted shape is "developer mode", where *"you pay for services on behalf of customers and charge them through your own billing… the only mode where end users do NOT need a Kite Passport."* Personal use requires a device-bound passkey and a local command-running agent. This matches what `docs/HACKATHON_SWAP.md` already scoped as Swap C, slide-only.
 - **Faucets not done.** Both wallets show `0.000000 ETH gas`; treasury holds $0.06 USDC. This blocks only the live "Fund" step — the stepper already shows Fund complete from the agent's existing balance, and x402 payments need no gas.
-- **Backend changes since the last deploy are not live on Render** — the auth cache, connection fix, job endpoints, LLM timeout and multi-tenancy all require a redeploy.
+- **`APP_ENV` is unset on Render**, so production reports `env: development` and `/cards/test-issue` — the one issuance path that bypasses the mandate pipeline — is NOT disabled there. It is `require_owner`-gated and Stripe is in test mode, so this is not an open hole, but the guard at `api/routes/cards.py:37` is inert in production. Setting `APP_ENV=production` closes it and also disables the Commerce page's test-issue button, so decide which is wanted before flipping.
 - **Background monitoring is owner-only.** `items_due_for_check()` filters by user and the worker runs unbound; a guest's on-demand "check now" works.
 - **`thread_embeddings` has no `user_id` and no RLS** — the one shared table, now that other accounts exist. It is also still write-only; nothing reads it.
 - **Demo-day items the user has declined:** fallback video and dress rehearsals. Demo day would be the first full run.
@@ -85,7 +107,7 @@ Frontend:
 
 ## Prompt for New Chat
 
-This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and can complete purchases under a spending mandate. It is the submission for an agentic-payments hackathon (SMU, 14–16 August 2026; sponsors StraitsX, Avalanche, Kite).
+This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and can complete purchases under a spending mandate. It is the submission for the **StraitsX Agentic Playground Hackathon** (Singapore, 14 Aug 1800 – 16 Aug 1300, 2026; submission deadline Sunday 1100). Hosted by StraitsX. Partners: Avalanche (title), AWS (cloud), Convergence Summit, SMU Fintech / SMU AI (venue). Prize pool S$7,500; teams up to 3. **Kite is not involved** — an earlier version of this document listed it as a sponsor and that was wrong.
 
 Frontend is live at `https://laeria-ai.vercel.app`; backend at `https://laeria-ai-backend.onrender.com`. Everything is committed and synced at `fa1a6c3`. 41 backend tests pass and the production build is clean.
 
@@ -99,6 +121,6 @@ Several environment facts cost real time last session. A ContextVar set inside a
 
 Automated page checks have twice passed on functionally broken pages, so `scripts/verify_pages.py` writes screenshots that are worth looking at rather than trusting the score.
 
-Kite Agent Passport was researched but not integrated; its delegation schema maps closely onto the existing `ActionMandate`. Faucets remain undone, which affects only the live "Fund" demo step. The user has declined to record a fallback video or run dress rehearsals.
+Kite Agent Passport was researched but not integrated, and is now descoped to a slide because Kite is not a partner of this event — see Hackathon Spec above. Faucets remain undone, which affects only the live "Fund" demo step. The user has declined to record a fallback video or run dress rehearsals.
 
 Wait for instructions before taking any action.

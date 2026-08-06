@@ -1,10 +1,13 @@
 # Hackathon Swap Playbook (Aug 14–16, 2026)
 
-Event-day integration checklist for the three sponsor swaps. Each section:
-what flips, what code is already prepped, what to verify, and the fallback if
-the sandbox fails on stage. Do NOT improvise beyond this doc at 11pm Friday.
+Event-day integration checklist. Each section: what flips, what code is already
+prepped, what to verify, and the fallback if the sandbox fails on stage. Do NOT
+improvise beyond this doc at 11pm Friday.
 
-Facts below verified 2026-07-20.
+Swaps A and B are the sponsors that matter — StraitsX hosts, Avalanche is title
+partner. Swap C (Kite) is descoped; it is not a partner of this event.
+
+Facts below verified 2026-07-20, sponsor list re-verified 2026-08-06.
 
 ---
 
@@ -88,9 +91,27 @@ offline; pitch the adapter architecture with the StraitsX mapping on a slide.
 
 ---
 
-## Swap C — Kite (agent identity, stretch)
+## Swap C — Kite (DESCOPED — not a sponsor)
 
-**Verified:** Kite Agent Passport = cryptographic agent identity + spend
+**2026-08-06:** the Luma listing names StraitsX as host and Avalanche, AWS,
+Convergence Summit and SMU Fintech / SMU AI as partners. Kite is not involved.
+Everything below stands as research; none of it should consume event time.
+Two corrections to it, from the Kite docs:
+
+- The "registers extra networks via `X402_EXTRA_NETWORKS` if they speak x402"
+  line is not established. Kite's service-provider guide documents scheme
+  `gokite-aa` on `kite-testnet` (chain 2368, facilitator
+  `facilitator.pieverse.io`); `payment.py` registers the standard `exact`
+  scheme, and Kite is absent from Coinbase's x402 network-support list.
+- A hosted service cannot hold passports for its users. Kite's only
+  server-shaped mode is "developer mode" — the developer's own Passport pays
+  and the developer bills customers separately. Personal use needs a
+  device-bound passkey and a local command-running agent.
+
+The `agent_identity` slide framing below is still the right answer, and costs
+nothing.
+
+**Original research:** Kite Agent Passport = cryptographic agent identity + spend
 rules + verifiable receipts; mainnet since Apr 2026, testnet live with test
 USDT. Docs: https://docs.gokite.ai/ (developer guide:
 /kite-agent-passport/developer-guide). Three integration modes incl. MCP.
