@@ -54,6 +54,23 @@ You can also pre-fill the defaults in `config.js` instead of typing them.
 runs as a polled job (30–90s) and returns consensus, red flags, failure modes
 and alternatives, with a link to the full report.
 
+The page title is **not** sent as the query. Titles are written for search
+engines; Reddit search is literal keyword matching, so a title like *"Keychron
+K2 HE Wireless Magnetic Switch Custom Keyboard"* matches almost no real thread,
+the backend falls into its no-candidates retry, and you wait roughly twice as
+long for a low-confidence answer. `cleanQuery()` cuts the title to the part that
+names the thing — separator suffixes, bracketed asides and marketing vocabulary
+go, and the result is capped at six words:
+
+```
+Keychron K2 HE Wireless Magnetic Switch Custom Keyboard → Keychron K2 HE Magnetic Switch Keyboard
+Men's Tree Runner NZ - Medium Grey (Blizzard Sole)      → Men's Tree Runner NZ
+Anker 737 Power Bank (PowerCore 24K) — 24,000mAh …      → Anker 737 Power Bank
+```
+
+The same cleaned string is what the *full report* link carries, so the web app
+hits the backend's 24h cache instead of researching from cold.
+
 Verdicts are cached locally for 12 hours keyed on the product title, so
 revisiting a page is instant. The backend caches for 24h independently.
 

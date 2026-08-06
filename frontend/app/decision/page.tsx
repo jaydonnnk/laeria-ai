@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, ResearchBrief } from "../../lib/api";
 import { Sources } from "../../components/Sources";
@@ -49,21 +49,45 @@ export default function DecisionPage() {
     }
   }
 
-  async function run(e: React.FormEvent) {
-    e.preventDefault();
-    if (!query.trim() || loading) return;
+  async function runQuery(q: string, ctx: string) {
+    if (!q.trim() || loading) return;
     setLoading(true);
     setError(null);
     setBrief(null);
     setElapsed(0);
     try {
-      setBrief(await api.startDecision(query.trim(), context.trim(), 8, setElapsed));
+      setBrief(await api.startDecision(q.trim(), ctx.trim(), 8, setElapsed));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
   }
+
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    await runQuery(query, context);
+  }
+
+  // ?q= arrives from the browser extension's "full report" link. Read from
+  // window rather than useSearchParams so this page keeps prerendering without
+  // a Suspense boundary.
+  //
+  // It runs the query rather than only filling the box: the extension has
+  // already researched this exact string, and the backend caches briefs for
+  // 24h keyed on the normalised query — so this is a cache hit that renders
+  // in about a second. Showing a pre-filled form and waiting for a second
+  // click would be friction in front of an answer that already exists.
+  const autoRan = useRef(false);
+  useEffect(() => {
+    if (autoRan.current) return;
+    const q = new URLSearchParams(window.location.search).get("q");
+    if (!q?.trim()) return;
+    autoRan.current = true;
+    setQuery(q);
+    void runQuery(q, "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <main className="max-w-[760px] mx-auto px-6 py-10 md:py-14">

@@ -42,6 +42,49 @@
 
   const meta = (sel) => document.querySelector(sel)?.getAttribute("content") || "";
 
+  // Marketing words that shops stuff into titles for search engines and that
+  // no human writes in a Reddit thread.
+  const NOISE = new RegExp(
+    "\\b(" +
+      [
+        "official", "genuine", "authentic", "premium", "professional", "pro-grade",
+        "brand", "new", "latest", "upgraded", "advanced", "ultimate", "deluxe",
+        "custom", "customizable", "wireless", "wired", "portable", "lightweight",
+        "high", "quality", "durable", "multi", "multifunctional", "universal",
+        "for", "with", "and", "the", "a", "an",
+      ].join("|") +
+      ")\\b",
+    "gi"
+  );
+
+  /**
+   * A product title is written for search engines; a Reddit query has to be
+   * written the way people talk. `_IDENTIFY_SYSTEM` on the backend says it
+   * outright — Reddit search is literal keyword matching — so a title like
+   * "Keychron K2 HE Wireless Magnetic Switch Custom Keyboard" matches almost
+   * no real thread, the pipeline falls into its no-candidates retry, and the
+   * user waits twice as long for a low-confidence answer about nothing.
+   *
+   * Cut to the part that names the thing: drop everything after a separator
+   * (usually the colourway or the brand), drop bracketed asides, drop the
+   * marketing vocabulary, and keep it short.
+   */
+  function cleanQuery(title) {
+    let q = String(title || "")
+      .split(/\s+[-–—|·:]\s+/)[0]          // "Tree Runner NZ - Medium Grey" -> "Tree Runner NZ"
+      .replace(/[([{][^)\]}]*[)\]}]/g, " ") // "(Blizzard Sole)"
+      .replace(/[^\w\s'&+.-]/g, " ");
+
+    const stripped = q.replace(NOISE, " ").replace(/\s+/g, " ").trim();
+    // Only accept the stripped form if something recognisable survives —
+    // some products ARE mostly stopwords, and an empty query is worse than a
+    // noisy one.
+    if (stripped.split(" ").filter(Boolean).length >= 2) q = stripped;
+
+    const words = q.replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    return words.slice(0, 6).join(" ");
+  }
+
   function parsePrice(value) {
     if (value == null) return 0;
     const n = parseFloat(String(value).replace(/[^0-9.]/g, ""));
@@ -263,7 +306,10 @@
   function renderBrief(brief, product, cached) {
     const conf = String(brief.confidence || "low").toLowerCase();
     const pick = brief.consensus_pick || "No clear consensus in the threads found.";
-    const q = encodeURIComponent(product.title);
+    // The cleaned query, not the page title — the web app re-runs whatever it
+    // is handed, and the backend cache is keyed on the exact string, so
+    // sending the title here would miss the cache and re-research from cold.
+    const q = encodeURIComponent(product.query || product.title);
     const el = renderCard(`
       <div class="head">
         <div>
@@ -314,11 +360,15 @@
     }
   });
 
-  async function research(product, force = false) {
+  async function research(rawProduct, force = false) {
+    const product = { ...rawProduct, query: cleanQuery(rawProduct.title) };
     renderCard(`
       <div class="head"><div class="eyebrow">laeria</div><button class="x" title="Close">&times;</button></div>
       <div class="row"><span class="spin"></span><span class="muted" id="p">asking the communities…</span></div>
-      <div class="sec muted" style="font-size:12px">Reading real threads takes 30–90 seconds. You can keep browsing.</div>
+      <div class="sec muted" style="font-size:12px">
+        Searching <b>${esc(product.query)}</b> — reading real threads takes 30–90 seconds.
+        You can keep browsing.
+      </div>
     `);
     progressEl = shell().querySelector("#p");
 

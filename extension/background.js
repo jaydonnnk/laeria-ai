@@ -100,7 +100,11 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-const POLL_MS = 2000;
+// The first poll is short on purpose: a query the backend already has cached
+// finishes almost immediately, and waiting a full interval before asking makes
+// an instant answer feel like a slow one.
+const FIRST_POLL_MS = 700;
+const POLL_MS = 1500;
 const POLL_TIMEOUT_MS = 8 * 60 * 1000;
 
 /** Submit research and poll to completion, reporting progress to the caller tab. */
@@ -110,8 +114,10 @@ async function runResearch(query, onProgress) {
     body: JSON.stringify({ query, thread_budget: 8 }),
   });
   const deadline = Date.now() + POLL_TIMEOUT_MS;
+  let wait = FIRST_POLL_MS;
   for (;;) {
-    await new Promise((r) => setTimeout(r, POLL_MS));
+    await new Promise((r) => setTimeout(r, wait));
+    wait = POLL_MS;
     const job = await api(`/research/jobs/${job_id}`);
     onProgress?.(job.elapsed_seconds);
     if (job.status === "done") {
@@ -169,13 +175,17 @@ const HANDLERS = {
   },
 
   async RESEARCH({ product, force }, sender) {
-    const key = (product.title || "").trim().toLowerCase();
+    // The cleaned query, not the page title. Content script derives it; the
+    // backend's own cache is keyed on the exact string, so keying locally on
+    // anything else would desync the two caches.
+    const query = (product.query || product.title || "").trim();
+    const key = query.toLowerCase();
     if (!force) {
       const hit = await cachedVerdict(key);
       if (hit) return { brief: hit, cached: true };
     }
     const tabId = sender?.tab?.id;
-    const brief = await runResearch(product.title, (seconds) => {
+    const brief = await runResearch(query, (seconds) => {
       if (tabId != null) {
         chrome.tabs.sendMessage(tabId, { type: "RESEARCH_PROGRESS", seconds }).catch(() => {});
       }
