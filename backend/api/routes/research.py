@@ -85,6 +85,32 @@ def act_on_brief(req: ActOnBriefRequest) -> dict:
     )
 
 
+@router.get("/subreddits")
+def suggest_subreddits(q: str) -> dict:
+    """Which communities a research run would read for this query.
+
+    Exists for the extension's order import. `POST /monitor/items` requires at
+    least one subreddit, and asking someone to name communities for a thing
+    they just bought is exactly where they abandon the flow. Reusing the
+    research planner means a monitored item watches the same places the
+    research would have read, rather than a guess made client-side.
+
+    Cheap by comparison with research itself — one small LLM call, or a
+    fixture hit when the corpus has a recorded plan for this query.
+    """
+    if len(q.strip()) < 3:
+        raise HTTPException(status_code=422, detail="q must be at least 3 characters")
+    try:
+        plan = ResearchAgent()._identify_subreddits(q.strip())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("subreddit suggestion failed for %r: %s", q, exc)
+        raise HTTPException(status_code=502, detail=f"could not plan: {exc}") from exc
+    return {
+        "subreddits": plan["subreddits"][:6],
+        "search_queries": plan["search_queries"],
+    }
+
+
 @router.post("/retrospective")
 def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
     """Mode 1 — outcome/update-post mining. Synchronous (2-4 minutes).

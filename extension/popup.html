@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        width: 300px; margin: 0; padding: 16px;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 14px; line-height: 1.5; color: #16181d; background: #fafaf8;
+      }
+      .mark { font-weight: 600; letter-spacing: -.01em; margin-bottom: 2px; }
+      .mark i { color: #0b7a5b; font-style: normal; }
+      .eyebrow {
+        font-family: ui-monospace, SFMono-Regular, monospace; font-size: 10px;
+        letter-spacing: .08em; text-transform: uppercase; color: #8a909c;
+      }
+      label { display: block; margin-top: 10px; }
+      input {
+        width: 100%; padding: 8px 10px; margin-top: 3px; font-size: 13px;
+        border: 1px solid #d8d5cd; border-radius: 6px; background: #fff; color: #16181d;
+      }
+      button {
+        width: 100%; margin-top: 12px; padding: 9px; font-size: 13px; cursor: pointer;
+        border-radius: 6px; border: 1px solid #0b7a5b; background: #0b7a5b; color: #fff;
+      }
+      button:hover { background: #096b4f; }
+      button:disabled { opacity: .55; cursor: default; }
+      button.ghost { border-color: #d8d5cd; background: #fff; color: #16181d; }
+      button.ghost:hover { background: #f6f6f3; }
+      .msg { margin-top: 10px; font-size: 12px; }
+      .err { color: #c0362c; }
+      .ok { color: #0b7a5b; }
+      .muted { color: #5b616e; font-size: 12px; }
+      hr { border: 0; border-top: 1px solid #e7e5e0; margin: 14px 0 0; }
+      details { margin-top: 12px; }
+      summary { cursor: pointer; font-size: 12px; color: #5b616e; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="mark">laeria<i>.</i></div>
+    <div class="eyebrow">community verdict</div>
+
+    <div id="signed-out" class="hidden">
+      <label>Email<input id="email" type="email" autocomplete="username" /></label>
+      <label>Password<input id="password" type="password" autocomplete="current-password" /></label>
+      <button id="signin">Sign in</button>
+      <div class="muted" style="margin-top:10px">
+        Same account as the laeria web app.
+      </div>
+    </div>
+
+    <div id="signed-in" class="hidden">
+      <div class="msg" style="margin-top:12px">Signed in as <span id="who"></span></div>
+      <div class="muted" style="margin-top:8px">
+        Open a product page and the verdict pill appears at the bottom right.
+        On an order confirmation it offers to monitor what you bought.
+      </div>
+      <button id="signout" class="ghost">Sign out</button>
+    </div>
+
+    <div id="msg" class="msg"></div>
+
+    <details id="settings">
+      <summary>Connection settings</summary>
+      <label>Backend URL<input id="apiUrl" type="url" placeholder="https://…onrender.com" /></label>
+      <label>Supabase URL<input id="supabaseUrl" type="url" placeholder="https://….supabase.co" /></label>
+      <label>Supabase anon key<input id="supabaseAnonKey" type="text" placeholder="eyJ…" /></label>
+      <button id="save" class="ghost">Save</button>
+      <div class="muted" style="margin-top:8px">
+        All three are public values — the same ones the web app ships in its bundle.
+      </div>
+    </details>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>
