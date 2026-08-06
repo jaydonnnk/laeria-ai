@@ -22,13 +22,23 @@ class LLMService:
         # against OpenRouter on large synthesis calls — wedges the caller for
         # ten minutes with no way to tell it apart from slow work. A bounded
         # failure can be retried or degraded around; an unbounded one cannot.
+        # Retries multiply the timeout rather than bounding it: max_retries=2
+        # at a 120s timeout is a six-minute worst case for one call, and that
+        # is exactly how a model with a good median and a bad tail produces
+        # three-minute reports.
         self._client = OpenAI(
             base_url=settings.openrouter_base_url,
             api_key=settings.openrouter_api_key,
             timeout=float(settings.llm_timeout_seconds),
-            max_retries=2,
+            max_retries=settings.llm_max_retries,
         )
         self._model = settings.openrouter_model
+        # What a single complete_json can cost in the worst case. Callers that
+        # impose their own deadline must derive it from this, or they abandon
+        # work that was about to land.
+        self.worst_case_seconds = settings.llm_timeout_seconds * (
+            settings.llm_max_retries + 1
+        )
 
     def healthcheck(self) -> bool:
         """Minimal completion to confirm the key + model work."""

@@ -21,12 +21,23 @@ class Settings(BaseSettings):
 
     # OpenRouter
     openrouter_api_key: str = ""
-    openrouter_model: str = "anthropic/claude-sonnet-4.5"
+    openrouter_model: str = "anthropic/claude-haiku-4.5"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     # Per-request ceiling. The OpenAI SDK defaults to 600s, which turns an
     # intermittent stall into a ten-minute hang indistinguishable from slow
-    # work. Synthesis normally lands in 15-40s.
-    llm_timeout_seconds: int = 120
+    # work.
+    #
+    # 45s, not 120s, because the timeout is multiplied by the retry count and
+    # measurements put a healthy synthesis call at 18-25s. A call still
+    # running at 45s is not slow, it is stuck: benchmarked against the real
+    # prompt, one tail event took 287 SECONDS to return. Failing fast lets
+    # _synthesise fall back to half a brief in reasonable time, which is what
+    # that fallback is for.
+    llm_timeout_seconds: int = 45
+    # Attempts BEYOND the first. Each one costs another full timeout, so this
+    # and llm_timeout_seconds multiply: at the old 120s/2 a single synthesis
+    # half could occupy six minutes on its own.
+    llm_max_retries: int = 1
 
     # Reddit
     reddit_client_id: str = ""

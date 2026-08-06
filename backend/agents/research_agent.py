@@ -350,8 +350,6 @@ class ResearchAgent:
     def _synthesise(
         self, query: str, threads: list[RedditThread], subreddits: list[str]
     ) -> ResearchBrief:
-        from core.config import get_settings
-
         from agents.signal_analysis import analyse_threads
 
         threads, machine_warnings = analyse_threads(threads, self._llm)
@@ -382,8 +380,11 @@ class ResearchAgent:
             )
             # Second bound, independent of the HTTP timeout: whatever goes
             # wrong inside the client, a half cannot hold the whole brief
-            # hostage. Generous enough that a merely slow call still lands.
-            deadline = get_settings().llm_timeout_seconds + 30
+            # hostage. Derived from the client's own worst case rather than
+            # guessed at — set below timeout x attempts, this would abandon a
+            # retry that was about to succeed; set far above it, it stops
+            # bounding anything.
+            deadline = self._llm.worst_case_seconds + 15
             raw: dict = {}
             for fut, half in ((verdict_f, "verdict"), (scrutiny_f, "scrutiny")):
                 try:
