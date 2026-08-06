@@ -126,6 +126,29 @@ class Settings(BaseSettings):
     stripe_api_key: str = ""
     stripe_cardholder_id: str = ""
 
+    # StraitsX card issuing. Every unknown about their sandbox is an env var
+    # rather than a code change, because the credentials and the exact API
+    # shape only arrive at the event and 11pm on the Friday is the worst
+    # possible time to be editing a client. See services/cards.py.
+    straitsx_base_url: str = ""
+    straitsx_api_key: str = ""
+    # Auth scheme varies by provider: "Authorization: Bearer x" is the common
+    # default, but plenty use "X-API-Key: x" with no prefix.
+    straitsx_auth_header: str = "Authorization"
+    straitsx_auth_prefix: str = "Bearer "
+    # Endpoint paths. {id} is substituted with the issuer's card id.
+    straitsx_cards_path: str = "/v1/cards"
+    straitsx_card_path: str = "/v1/cards/{id}"
+    straitsx_card_secrets_path: str = "/v1/cards/{id}/secrets"
+    straitsx_card_txns_path: str = "/v1/cards/{id}/transactions"
+    # How a card is killed after its single use — DELETE, or a status PATCH.
+    straitsx_cancel_method: str = "POST"
+    straitsx_cancel_path: str = "/v1/cards/{id}/terminate"
+    # Card currency. Their product is XSGD/XUSD; the demo storefront prices in
+    # USD, so which one funds a USD-priced card is a booth question.
+    straitsx_currency: str = "USD"
+    straitsx_limit_interval: str = "per_authorization"
+
     # Demo storefront (Shopify dev store) driven by Playwright.
     shop_store_url: str = ""
     shop_storefront_password: str = ""

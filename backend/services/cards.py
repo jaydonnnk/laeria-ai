@@ -246,38 +246,172 @@ class MockIssuer(CardIssuer):
 
 # ---- StraitsX (hackathon sandbox — fill at the event) ----
 
-class StraitsXAdapter(CardIssuer):
-    """Stablecoin-backed card issuance via StraitsX.
+def _first(payload: dict, *names: str, default=None):
+    """First present value among several candidate key names.
 
-    To fill in at the hackathon once sandbox credentials exist. Mapping notes
-    for their API onto this interface:
-      - issue():   create card with a spend limit == the approved mandate
-                   amount; their stablecoin-funding leg replaces Stripe's
-                   Issuing balance (XUSD/XSGD debit).
-      - get_details(): fetch PAN/CVC live; do NOT persist.
-      - cancel():  terminate/freeze the card after single use.
-      - list_transactions(): card authorizations for the receipt view.
-    Questions for the StraitsX booth: sandbox base URL + auth scheme, card
-    spend-limit granularity (per-auth vs total), settlement webhook shape,
-    XSGD vs XUSD funding for USD-priced merchants.
+    The one thing genuinely unknown about the StraitsX sandbox until the event
+    is what they call their fields — `id` or `card_id` or `cardId`, `last4` or
+    `last_four`. Guessing wrong should not mean editing a parser at 11pm, so
+    every read below accepts the plausible spellings, including a nested
+    `data`/`card` envelope.
+    """
+    for scope in (payload, payload.get("data") or {}, payload.get("card") or {}):
+        if not isinstance(scope, dict):
+            continue
+        for n in names:
+            if scope.get(n) is not None:
+                return scope[n]
+    return default
+
+
+class StraitsXAdapter(CardIssuer):
+    """Stablecoin-backed virtual cards via StraitsX.
+
+    StraitsX publishes a Card Issuing API with a sandbox, but the credentials
+    and the exact contract only arrive at the event. So this is written as a
+    real HTTP client against the conventional shape of such an API, with every
+    unknown — base URL, auth header, endpoint paths, currency — pushed into
+    settings, and every response read tolerantly via `_first`.
+
+    The intent is that going live is filling env vars and, at worst, adjusting
+    one path string. Nothing here should need a code change on the night.
+
+    Booth questions this deliberately leaves open:
+      - sandbox base URL and auth scheme (bearer? API key header? HMAC?)
+      - spend-limit granularity: per-authorization or total
+      - is the PAN/CVC retrievable by API in sandbox (we never persist it)
+      - terminate vs freeze for single-use disposal
+      - XSGD or XUSD funding for a USD-priced merchant
     """
 
     name = "straitsx"
+    _TIMEOUT = 20.0
 
-    def issue(self, amount_limit_usd, merchant_hint="", metadata=None):  # noqa: ANN001
-        raise NotImplementedError("StraitsX sandbox access is granted at the event")
+    def __init__(self) -> None:
+        import httpx
 
-    def get_details(self, issuer_card_id):  # noqa: ANN001
-        raise NotImplementedError
+        s = get_settings()
+        if not s.straitsx_base_url or not s.straitsx_api_key:
+            raise RuntimeError(
+                "CARD_ISSUER=straitsx needs STRAITSX_BASE_URL and STRAITSX_API_KEY. "
+                "Set CARD_ISSUER=mock to run the pipeline without them."
+            )
+        self._s = s
+        self._http = httpx.Client(
+            base_url=s.straitsx_base_url.rstrip("/"),
+            timeout=self._TIMEOUT,
+            headers={
+                s.straitsx_auth_header: f"{s.straitsx_auth_prefix}{s.straitsx_api_key}",
+                "Content-Type": "application/json",
+            },
+        )
 
-    def cancel(self, issuer_card_id):  # noqa: ANN001
-        raise NotImplementedError
+    def _call(self, method: str, path: str, **kw) -> dict:
+        resp = self._http.request(method, path, **kw)
+        if resp.status_code >= 400:
+            # Surface the body: at an event, the provider's own error message
+            # is the fastest route to the right config.
+            raise RuntimeError(
+                f"StraitsX {method} {path} -> {resp.status_code}: {resp.text[:300]}"
+            )
+        try:
+            return resp.json()
+        except ValueError:
+            return {}
 
-    def list_transactions(self, issuer_card_id):  # noqa: ANN001
-        raise NotImplementedError
+    def issue(
+        self, amount_limit_usd: float, merchant_hint: str = "", metadata: dict | None = None
+    ) -> IssuedCard:
+        limit = round(max(amount_limit_usd, 0.01), 2)
+        body = {
+            "type": "virtual",
+            "currency": self._s.straitsx_currency,
+            "spending_limit": {
+                "amount": limit,
+                "interval": self._s.straitsx_limit_interval,
+            },
+            # Sent in both shapes: some APIs take a flat minor-unit amount.
+            "limit_amount": limit,
+            "metadata": {"merchant_hint": merchant_hint[:100], **(metadata or {})},
+        }
+        data = self._call("POST", self._s.straitsx_cards_path, json=body)
+        card_id = _first(data, "id", "card_id", "cardId", "reference")
+        if not card_id:
+            raise RuntimeError(f"StraitsX issue returned no card id: {str(data)[:300]}")
+        now = datetime.now(timezone.utc)
+        return IssuedCard(
+            issuer=self.name,
+            issuer_card_id=str(card_id),
+            last4=str(_first(data, "last4", "last_four", "lastFour", default="")),
+            exp_month=int(_first(data, "exp_month", "expiryMonth", "expMonth", default=now.month)),
+            exp_year=int(_first(data, "exp_year", "expiryYear", "expYear", default=now.year + 1)),
+            spend_limit_usd=limit,
+            status="active",
+        )
+
+    def get_details(self, issuer_card_id: str) -> CardDetails:
+        """Live PAN/CVC. Never persisted — see the module docstring."""
+        path = self._s.straitsx_card_secrets_path.format(id=issuer_card_id)
+        data = self._call("GET", path)
+        number = _first(data, "number", "pan", "card_number", "cardNumber")
+        if not number:
+            raise RuntimeError(
+                f"StraitsX returned no PAN from {path}. If their sandbox does not "
+                "expose card credentials by API, the checkout must run under "
+                "CHECKOUT_GATEWAY_PROFILE=bogus instead."
+            )
+        now = datetime.now(timezone.utc)
+        return CardDetails(
+            number=str(number),
+            cvc=str(_first(data, "cvc", "cvv", "securityCode", default="")),
+            exp_month=int(_first(data, "exp_month", "expiryMonth", "expMonth", default=now.month)),
+            exp_year=int(_first(data, "exp_year", "expiryYear", "expYear", default=now.year + 1)),
+            brand=str(_first(data, "brand", "network", "scheme", default="visa")),
+            name=_CARDHOLDER_NAME,
+        )
+
+    def cancel(self, issuer_card_id: str) -> None:
+        """Single-use disposal. Called from a `finally` on every path, so a
+        failure here must raise loudly rather than leave a live card behind
+        looking cancelled."""
+        path = self._s.straitsx_cancel_path.format(id=issuer_card_id)
+        method = self._s.straitsx_cancel_method.upper()
+        kw = {"json": {"status": "terminated"}} if method in ("PATCH", "PUT", "POST") else {}
+        self._call(method, path, **kw)
+
+    def list_transactions(self, issuer_card_id: str) -> list[dict]:
+        path = self._s.straitsx_card_txns_path.format(id=issuer_card_id)
+        try:
+            data = self._call("GET", path)
+        except RuntimeError as exc:  # receipts are nice-to-have, not load-bearing
+            logger.warning("StraitsX transactions unavailable: %s", exc)
+            return []
+        rows = data if isinstance(data, list) else (
+            _first(data, "transactions", "items", "results", default=[]) or []
+        )
+        out = []
+        for t in rows if isinstance(rows, list) else []:
+            if not isinstance(t, dict):
+                continue
+            out.append(
+                {
+                    "id": str(_first(t, "id", "transaction_id", default="")),
+                    "amount_usd": abs(float(_first(t, "amount", "amount_usd", default=0) or 0)),
+                    "type": str(_first(t, "type", "status", default="authorization")),
+                    "created": str(
+                        _first(t, "created", "created_at", "createdAt", default="")
+                    ),
+                }
+            )
+        return out
 
     def healthcheck(self) -> bool:
-        return False
+        try:
+            self._call("GET", self._s.straitsx_cards_path, params={"limit": 1})
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error("StraitsX healthcheck failed: %s", exc)
+            return False
 
 
 def get_issuer() -> CardIssuer:
