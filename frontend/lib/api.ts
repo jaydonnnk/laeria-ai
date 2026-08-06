@@ -269,11 +269,9 @@ export const api = {
 
   // Hackathon Phase 2: disposable virtual cards
   listCards: () => request<Card[]>("/cards/"),
-  testIssueCard: (amount_limit_usd: number, merchant_hint = "") =>
-    request<Card>("/cards/test-issue", {
-      method: "POST",
-      body: JSON.stringify({ amount_limit_usd, merchant_hint }),
-    }),
+  // No test-issue binding on purpose: /cards/test-issue mints a card outside
+  // the mandate pipeline and is disabled whenever APP_ENV != development, so a
+  // UI affordance for it could only render a 403 on the deployed app.
   cardDetails: (id: string) => request<CardDetails>(`/cards/${id}/details`),
   cancelCard: (id: string) =>
     request<Card>(`/cards/${id}/cancel`, { method: "POST" }),
@@ -304,7 +302,9 @@ export const api = {
 
 export interface WalletParty {
   address: string;
+  /** Same number as `token`; the older key, kept so nothing breaks mid-event. */
   usdc?: number;
+  token?: number;
   native?: number;
   error?: string;
 }
@@ -314,6 +314,11 @@ export interface WalletBalances {
   network_id: string;
   native_symbol: string;
   usdc_contract: string;
+  // The funding token is configurable (STABLECOIN_* env) because the hackathon
+  // judges funding in XSGD, not USDC. Optional so an older backend still types.
+  token_contract?: string;
+  token_symbol?: string;
+  token_decimals?: number;
   agent: WalletParty;
   treasury: WalletParty;
 }
@@ -322,6 +327,7 @@ export interface FundResult {
   tx_hash: string;
   explorer_url: string;
   amount_usd: number;
+  token_symbol?: string;
   from: string;
   to: string;
   network: string;

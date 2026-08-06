@@ -1,6 +1,6 @@
-"""Wallet routes — funding pillar. Balances are read-only; funding moves
-TESTNET USDC treasury → agent (mainnet refused in the service). Auth via the
-router-level require_owner dependency in api/main.py."""
+"""Wallet routes — funding pillar. Balances are read-only; funding moves the
+configured TESTNET stablecoin treasury → agent (any mainnet is refused in the
+service). Auth via the router-level require_owner dependency in api/main.py."""
 
 from __future__ import annotations
 

@@ -91,6 +91,24 @@ class Settings(BaseSettings):
     # Avalanche Fuji testnet (hackathon rail swap; see docs/HACKATHON_SWAP.md)
     avalanche_fuji_rpc_url: str = "https://api.avax-test.network/ext/bc/C/rpc"
 
+    # The token the Funding pillar reads and moves. Each network in
+    # services/wallet.py carries a default (USDC everywhere it is known), and
+    # these override it without a code change.
+    #
+    # This exists because the StraitsX hackathon judges funding in XSGD, whose
+    # contract address and decimals are only obtainable from StraitsX at the
+    # event — so the swap has to be three env vars set at 11pm, not an edit to
+    # a dict literal. An empty/zero value means "use the network default".
+    #
+    # XSGD on Avalanche C-Chain mainnet is reportedly
+    # 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E; no public Fuji deployment was
+    # found. Confirm both the address AND the decimals at the booth — 6 is the
+    # assumption below and an wrong guess silently misreports every balance by
+    # orders of magnitude.
+    stablecoin_contract: str = ""
+    stablecoin_symbol: str = ""
+    stablecoin_decimals: int = 0
+
     # Card issuance — "mock" (offline fake), "stripe" (Issuing test mode),
     # "straitsx" (event sandbox, adapter stubbed until then).
     card_issuer: str = "mock"

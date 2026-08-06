@@ -9,7 +9,7 @@ import { Stat } from "../../components/ui/Stat";
 import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
 import { Stepper, Step, StepState } from "../../components/commerce/Stepper";
-import { dealIn, shake } from "../../lib/motion";
+import { shake } from "../../lib/motion";
 import {
   api,
   Card as CardT,
@@ -368,14 +368,17 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
   const [funding, setFunding] = useState(false);
   const [fundMsg, setFundMsg] = useState<React.ReactNode>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Whatever the backend is funding in — USDC today, XSGD at the event. Naming
+  // the token in the UI matters on stage: a panel reading "USDC balance" while
+  // the chain holds XSGD is the kind of detail a judge notices.
+  const symbol = balances?.token_symbol || "USDC";
 
   const refresh = useCallback(async () => {
     try {
       const b = await api.walletBalances();
       setBalances(b);
       setErr(null);
-      const agentUsdc = "usdc" in b.agent ? b.agent.usdc ?? 0 : 0;
-      onFunded(agentUsdc > 0);
+      onFunded((b.agent.token ?? b.agent.usdc ?? 0) > 0);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -394,7 +397,7 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
       const res = await api.walletFund(Number(amount));
       setFundMsg(
         <>
-          Funded ${res.amount_usd.toFixed(2)} USDC —{" "}
+          Funded {res.amount_usd.toFixed(2)} {res.token_symbol ?? symbol} —{" "}
           <a className="text-info hover:underline" href={res.explorer_url} target="_blank" rel="noreferrer">
             view transaction ↗
           </a>{" "}
@@ -432,7 +435,7 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
                 <div className="text-sm text-danger">{party.error}</div>
               ) : party ? (
                 <>
-                  <Stat value={party.usdc ?? 0} label="USDC balance" prefix="$" />
+                  <Stat value={party.token ?? party.usdc ?? 0} label={`${symbol} balance`} />
                   <div className="tnum text-xs text-ink-subtle mt-2">
                     {(party.native ?? 0).toFixed(6)} {balances?.native_symbol} gas
                   </div>
@@ -515,10 +518,7 @@ function MandateSummary() {
 
 function CardsSection({ onCount }: { onCount: (n: number) => void }) {
   const [cards, setCards] = useState<CardT[] | null>(null);
-  const [limit, setLimit] = useState("25");
-  const [issuing, setIssuing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -535,51 +535,28 @@ function CardsSection({ onCount }: { onCount: (n: number) => void }) {
     refresh();
   }, [refresh]);
 
-  async function testIssue(e: React.FormEvent) {
-    e.preventDefault();
-    setIssuing(true);
-    setErr(null);
-    try {
-      await api.testIssueCard(Number(limit) || 1, "dev test issue");
-      await refresh();
-      // deal-in the newest card
-      requestAnimationFrame(() => dealIn(gridRef.current?.firstElementChild as HTMLElement));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIssuing(false);
-    }
-  }
-
+  // The "Issue test card" form that used to sit here called /cards/test-issue,
+  // which mints a card OUTSIDE the mandate pipeline. That endpoint is dev-only
+  // and now correctly disabled in production (APP_ENV), so the button could
+  // only ever render a 403 into the error banner on the deployed app. Cards
+  // appear here by being issued through a purchase, which is the claim the
+  // product actually makes.
   return (
     <section className="mb-10">
       <SectionHeader n="03" title="Disposable cards" aside="one per purchase · destroyed after use" />
       {err && <SectionNotice message={err} onRetry={refresh} />}
       <p className="text-sm text-ink-muted max-w-[46rem] mb-5">
         Card numbers are never stored — <em>Reveal</em> fetches them live from the
-        issuer. Each card&apos;s limit is pinned to its purchase.
+        issuer. Each card&apos;s limit is pinned to its purchase, and the card is
+        cancelled once that purchase is attempted.
       </p>
-      <form onSubmit={testIssue} className="flex items-end gap-3 mb-6">
-        <Field label="Test limit (USD)">
-          <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden w-[140px]">
-            <span className="px-3 text-ink-subtle text-sm border-r border-hairline">$</span>
-            <input
-              type="number" step="0.01" min="0.01"
-              value={limit}
-              onChange={(e) => setLimit(e.target.value)}
-              className="tnum w-full px-3 py-2 text-sm bg-transparent outline-none"
-            />
-          </div>
-        </Field>
-        <Button type="submit" variant="secondary" disabled={issuing}>
-          {issuing ? "Issuing…" : "Issue test card"}
-        </Button>
-      </form>
       {cards && cards.length === 0 && (
-        <p className="text-ink-subtle text-sm">No cards issued yet.</p>
+        <p className="text-ink-subtle text-sm">
+          No cards yet — one is issued when a purchase is approved above.
+        </p>
       )}
       {cards && cards.length > 0 && (
-        <div ref={gridRef} className="grid gap-6 sm:grid-cols-2">
+        <div className="grid gap-6 sm:grid-cols-2">
           {cards.map((c) => (
             <CardView key={c.id} card={c} onChanged={refresh} onError={setErr} />
           ))}
