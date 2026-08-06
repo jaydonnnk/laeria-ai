@@ -15,22 +15,45 @@ Facts below verified 2026-07-20, sponsor list re-verified 2026-08-06.
 
 **Verified:** the default facilitator (x402.org) does NOT support Fuji — its
 `/supported` lists Base Sepolia (`eip155:84532`) + non-EVM chains only.
-Avalanche runs its own x402 facilitator ecosystem instead:
+Avalanche runs its own x402 facilitator ecosystem instead.
 
-| Facilitator | Notes |
-|---|---|
-| Thirdweb x402 | enterprise, EIP-7702 gasless; needs a thirdweb server wallet/key |
-| PayAI | built for AI-agent payments on Avalanche |
-| x402-rs | self-hosted Rust facilitator, zero fees |
-| Ultravioleta DAO | gasless, multi-network |
+**RESOLVED 2026-08-06 — use Ultravioleta DAO. No DevRel question needed.**
+Probed `https://facilitator.ultravioletadao.xyz/supported` directly:
+
+```
+v2  exact  eip155:43113  tokens=[('usdc', '0x54258902…', 6)]   ← Fuji
+v2  exact  eip155:43114  tokens=[('usdc', '0xB97EF9Ef…', 6)]   ← mainnet
+```
+
+That is the exact protocol version (2), scheme (`exact`) and CAIP-2 network id
+the Python SDK in `payment.py` already speaks, and the USDC contract matches
+the Fuji entry in `services/wallet.py` byte for byte. `/health` returns
+`{"status":"healthy"}`. It is a plain HTTP facilitator with the standard
+`/verify` + `/settle` REST surface, so it drops into `X402_FACILITATOR_URL`
+with no SDK change, no API key and no account.
+
+Rejected alternatives, for the record:
+- **Thirdweb** — the officially-featured option, but it is a JS SDK object
+  (`facilitator({client, serverWalletAddress})`), not a URL. Needs a thirdweb
+  account, a secret key and an ERC-4337 server wallet. Not reachable from
+  Python without reimplementation.
+- **PayAI** — plain URL (`https://api.payai.network`) and has a Python SDK, so
+  it is the fallback, but `/supported` returned empty when probed.
+- **x402-rs** — self-hosting removes a dependency but adds a service to run on
+  the night. Unnecessary now.
+
+Ultravioleta also covers 100% of gas, and the Avalanche academy confirms the
+consequence: *"You don't need test AVAX because the facilitator will pay the
+gas fee."* **So the blocked AVAX faucet does not affect x402 payments at all.**
+It blocks only `wallet.fund_agent`, which is a plain ERC-20 transfer this
+backend signs itself — that still needs gas in the treasury.
 
 Docs hub: https://build.avax.network/academy/blockchain/x402-payment-infrastructure/04-x402-on-avalanche/03-facilitators
-Expect DevRel at the event to point at the blessed one — ask first.
 
 **Config flip (.env):**
 ```
 X402_NETWORK=eip155:43113
-X402_FACILITATOR_URL=<facilitator from Avalanche DevRel>
+X402_FACILITATOR_URL=https://facilitator.ultravioletadao.xyz
 AVALANCHE_FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc   # already default
 ```
 
@@ -42,9 +65,17 @@ AVALANCHE_FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc   # already de
   `X402_NETWORK` — balances + funding transfer work the moment the env flips.
 - `bazaar.PAYABLE_NETWORKS` includes Fuji.
 
-**Pre-event checklist (do BEFORE Friday):**
-- [ ] Faucet AVAX to agent + treasury wallets: https://core.app/tools/testnet-faucet/ (needs a mainnet-funded wallet or coupon code — Avalanche hands out codes at events; ask if blocked)
-- [ ] Faucet Fuji USDC (Circle faucet https://faucet.circle.com → Avalanche Fuji)
+**Pre-event checklist:**
+- [x] Faucet Fuji USDC — done 2026-08-06, treasury `0x3aDe…68d0` holds 20 USDC
+      (Circle https://faucet.circle.com → Avalanche Fuji). Ungated.
+- [ ] **BLOCKED — Faucet AVAX to treasury.** Every route gates on a nonzero
+      mainnet C-Chain balance, and the gate is circular: core.app wants "a
+      coupon OR mainnet AVAX > 0", and Avalanche Support requires mainnet AVAX
+      before issuing the coupon. QuickNode and Chainlink gate the same way.
+      Ask DevRel on the Friday, or have anyone with a Fuji balance send 2 AVAX
+      directly — it is worthless testnet money and needs no faucet.
+      Blocks ONLY `wallet.fund_agent`. x402 payments are gasless via the
+      facilitator, so the demo's payment path is unaffected.
 - [ ] Confirm balances show on /commerce with `X402_NETWORK=eip155:43113`
 
 **Verify at event:** `python -m tests.test_environment` (wallet RPC check),
