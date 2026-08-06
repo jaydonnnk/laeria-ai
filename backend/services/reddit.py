@@ -96,11 +96,25 @@ class RedditService:
     _last_request_at = 0.0
 
     def _pace(self) -> None:
+        """Reserve this request's slot in the process-wide rate limit.
+
+        The sleep happens OUTSIDE the lock, and that is the whole point. Held
+        across the sleep, the lock serialises every caller: each request then
+        costs the full gap PLUS its own latency, so eight thread fetches cost
+        eight times the sum rather than eight gaps. Reserving a slot and
+        waiting for it lets those latencies overlap while the rate Reddit
+        actually observes is unchanged — still one request per gap, still one
+        shared cursor for the whole process.
+        """
         with RedditService._pace_lock:
-            elapsed = time.monotonic() - RedditService._last_request_at
-            if elapsed < _MIN_REQUEST_GAP_SECONDS:
-                time.sleep(_MIN_REQUEST_GAP_SECONDS - elapsed)
-            RedditService._last_request_at = time.monotonic()
+            slot = max(
+                time.monotonic(),
+                RedditService._last_request_at + _MIN_REQUEST_GAP_SECONDS,
+            )
+            RedditService._last_request_at = slot
+        delay = slot - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
     @retry(
         retry=retry_if_exception(_is_retryable),

@@ -32,6 +32,11 @@ logger = get_logger(__name__)
 # expensive part — one HTTP request each, politely paced.
 _SEARCH_LIMIT_PER_SUB = 10
 _MAX_SUBREDDITS = 4
+# How many Reddit requests may be in flight at once. This does NOT raise the
+# request rate — RedditService paces process-wide off one cursor — it only
+# stops each request's latency being stacked on top of every other request's
+# pacing gap. Modest on purpose: beyond the gap there is nothing to win.
+_FETCH_CONCURRENCY = 4
 
 _IDENTIFY_SYSTEM = """You identify which subreddits hold the best first-hand \
 human discussion for a research query. Respond with JSON only:
@@ -229,14 +234,26 @@ class ResearchAgent:
 
         # 2. Search every phrasing in every subreddit (cheap, 1 request each),
         #    dedupe across variants.
+        # Concurrent, but NOT faster per Reddit: the pacing cursor in
+        # RedditService is process-wide, so these still leave at one request
+        # per gap. What overlaps is each request's latency, which was
+        # previously stacked on top of every gap — 9 searches cost 9x(gap+RTT)
+        # serially and 9 gaps concurrently.
         candidates: list[RedditThread] = []
-        for sub in subreddits:
-            for sq in search_queries:
-                candidates.extend(
-                    self._reddit.search_subreddit(
-                        sub, sq, time_filter="year", limit=_SEARCH_LIMIT_PER_SUB
-                    )
+        with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as pool:
+            futures = [
+                pool.submit(
+                    self._reddit.search_subreddit,
+                    sub, sq, time_filter="year", limit=_SEARCH_LIMIT_PER_SUB,
                 )
+                for sub in subreddits
+                for sq in search_queries
+            ]
+            for fut in futures:
+                try:
+                    candidates.extend(fut.result())
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("search failed: %s", exc)
         if not candidates:
             # Retry once with the user's own words, all-time, across the subs.
             logger.info("no hits for %s; retrying with raw query", search_queries)
@@ -258,12 +275,9 @@ class ResearchAgent:
         chosen = _spread_pick(candidates, thread_budget)
 
         # 4. Fetch full threads (expensive part), then signal-filter.
-        full_threads: list[RedditThread] = []
-        for t in chosen:
-            try:
-                full_threads.append(self._reddit.get_thread_with_comments(t.id))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("thread %s fetch failed: %s", t.id, exc)
+        #    Results are collected in `chosen` order rather than completion
+        #    order, so the corpus handed to the LLM stays engagement-ranked.
+        full_threads = self._fetch_threads(chosen)
         filtered = self._reddit.apply_signal_filters(full_threads)
         if not filtered:
             return _empty_brief(subreddits, "Threads found but none passed signal filters.")
@@ -275,6 +289,27 @@ class ResearchAgent:
         return brief
 
     # ---- internals ----
+
+    def _fetch_threads(self, chosen: list[RedditThread]) -> list[RedditThread]:
+        """Full thread+comment fetches, overlapped.
+
+        Order follows `chosen`, not completion, because the corpus is handed
+        to the LLM in this order and `_spread_pick` already ranked it. A
+        failed fetch is dropped with a warning — one dead thread must not cost
+        the whole brief.
+        """
+        results: dict[str, RedditThread] = {}
+        with ThreadPoolExecutor(max_workers=_FETCH_CONCURRENCY) as pool:
+            futures = {
+                pool.submit(self._reddit.get_thread_with_comments, t.id): t
+                for t in chosen
+            }
+            for fut, t in futures.items():
+                try:
+                    results[t.id] = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("thread %s fetch failed: %s", t.id, exc)
+        return [results[t.id] for t in chosen if t.id in results]
 
     def _identify_subreddits(self, query: str) -> dict:
         # The plan decides which URLs get fetched, so it is part of the
@@ -447,12 +482,7 @@ class ResearchAgent:
 
         # 4. Read the strongest retrospectives in full.
         chosen = sorted(retro_candidates, key=_engagement_key, reverse=True)[:thread_budget]
-        full_threads: list[RedditThread] = []
-        for t in chosen:
-            try:
-                full_threads.append(self._reddit.get_thread_with_comments(t.id))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("thread %s fetch failed: %s", t.id, exc)
+        full_threads = self._fetch_threads(chosen)
         if not full_threads:
             return _empty_outcomes("Retrospective posts found but none could be fetched.")
 
