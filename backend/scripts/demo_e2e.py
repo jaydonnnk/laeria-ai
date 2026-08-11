@@ -54,7 +54,6 @@ def _reset() -> bool:
 def _checks() -> bool:
     from services.cards import get_issuer
     from services.storefront import StorefrontService
-    from services.wallet import WalletService
 
     results = []
 
@@ -70,7 +69,6 @@ def _checks() -> bool:
 
     check("storefront (search + catalogue)", StorefrontService().healthcheck)
     check("card issuer", get_issuer().healthcheck)
-    check("wallet RPC", WalletService().healthcheck)
 
     def _pw() -> bool:
         from playwright.sync_api import sync_playwright
@@ -79,6 +77,13 @@ def _checks() -> bool:
         return True
 
     check("playwright chromium", _pw)
+
+    # The chain side prints its own per-check lines: "does the RPC answer" was
+    # never the question — gas, the token's identity and the facilitator are.
+    from scripts.check_chain import run as chain_run
+
+    print("  chain:")
+    results.append(chain_run())
     return all(results)
 
 
