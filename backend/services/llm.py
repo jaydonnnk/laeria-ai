@@ -153,9 +153,48 @@ def _track(resp) -> None:
         pass
 
 
+def _balanced_objects(text: str):
+    """Every balanced ``{...}`` span in `text`, in order of where it starts.
+
+    A regex cannot do this. The previous `\\{.*\\}` was greedy from the first
+    brace to the last, so a model that emitted a stray opening brace before
+    its object — observed from deepseek as ``{\\n{"subreddits": ...}`` — made
+    the salvage attempt fail on exactly the input it existed to salvage.
+
+    Scanning tracks string literals and escapes, so a brace inside a JSON
+    string cannot throw the depth count off.
+    """
+    for start, ch in enumerate(text):
+        if ch != "{":
+            continue
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            c = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif c == "\\":
+                    escaped = True
+                elif c == '"':
+                    in_string = False
+                continue
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start : i + 1]
+                    break
+
+
 def _parse_json_lenient(raw: str) -> dict:
-    """Parse model output into a dict, tolerating markdown fences and
-    leading/trailing prose. Raises ValueError when nothing parses."""
+    """Parse model output into a dict, tolerating markdown fences, stray
+    braces, and leading/trailing prose. Raises ValueError when nothing
+    parses — a caller must treat that as a failed run, never as empty data."""
     import json
     import re
 
@@ -167,11 +206,17 @@ def _parse_json_lenient(raw: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Last resort: grab the outermost {...} block.
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
+        pass
+
+    # Earliest balanced object wins, not the largest: an outer object always
+    # starts before the objects nested inside it, so "earliest" picks the
+    # whole payload rather than one of its own values.
+    for candidate in _balanced_objects(text):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+
     raise ValueError(f"model did not return valid JSON: {raw[:200]!r}")
