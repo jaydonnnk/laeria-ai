@@ -65,18 +65,84 @@ AVALANCHE_FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc   # already de
   `X402_NETWORK` — balances + funding transfer work the moment the env flips.
 - `bazaar.PAYABLE_NETWORKS` includes Fuji.
 
+**Gas is required. The earlier note that it blocked only `fund_agent` is out
+of date** — on-chain settlement (agent → merchant, added 2026-08-12) is a
+second self-signed ERC-20 transfer, so BOTH wallets need native AVAX. The
+facilitator's gas sponsorship covers x402 payments only; it does not touch
+transfers this backend signs itself.
+
+**Faucet gate — resolved by decision, not by finding an ungated faucet.**
+Every route (core.app, QuickNode, Chainlink) gates on a nonzero mainnet
+C-Chain balance, and core.app's coupon path is circular. Two ways out:
+ask someone with a Fuji balance to send some directly, or acquire a small
+amount of mainnet AVAX to satisfy the gate. **Plan of record is the latter**
+— the community-ask route was declined as too uncertain to schedule around.
+See `README`/the walkthrough for the step order; the one thing that must not
+be got wrong is withdrawing on **Avalanche C-Chain**, not X-Chain, since the
+faucet reads C-Chain only.
+
+Needed: ~0.05 AVAX total. Fuji gas is ~25 nAVAX against ~50k-gas transfers,
+so a single 2-AVAX faucet drop is orders of magnitude more than enough.
+
 **Pre-event checklist:**
 - [x] Faucet Fuji USDC — done 2026-08-06, treasury `0x3aDe…68d0` holds 20 USDC
       (Circle https://faucet.circle.com → Avalanche Fuji). Ungated.
-- [ ] **BLOCKED — Faucet AVAX to treasury.** Every route gates on a nonzero
-      mainnet C-Chain balance, and the gate is circular: core.app wants "a
-      coupon OR mainnet AVAX > 0", and Avalanche Support requires mainnet AVAX
-      before issuing the coupon. QuickNode and Chainlink gate the same way.
-      Ask DevRel on the Friday, or have anyone with a Fuji balance send 2 AVAX
-      directly — it is worthless testnet money and needs no faucet.
-      Blocks ONLY `wallet.fund_agent`. x402 payments are gasless via the
-      facilitator, so the demo's payment path is unaffected.
-- [ ] Confirm balances show on /commerce with `X402_NETWORK=eip155:43113`
+- [x] Facilitator re-probed 2026-08-12 — `/health` healthy, `/supported` still
+      serves `x402Version 2 / exact / eip155:43113` with USDC
+      `0x5425890298…`. It now also publishes v1 aliases (`avalanche-fuji`)
+      across 114 entries; the v2 CAIP-2 entry the SDK speaks is unchanged.
+- [ ] Mainnet AVAX → treasury `0x3aDe…68d0` (**C-Chain**), then core.app faucet
+- [ ] Send 0.2 Fuji AVAX treasury → agent `0x7ecbe755…2ee5` (settlement gas)
+- [ ] Deploy `infra/contracts/XSGDTest.sol` (see below)
+- [ ] `python -m scripts.check_chain` → **CHAIN READY**
+
+**x402 on Fuji is USDC-only.** The facilitator lists no other token for
+`eip155:43113`. Once `STABLECOIN_CONTRACT` points at the XSGD stand-in, the
+funding/settlement legs run in XSGD while the x402 rail still wants USDC —
+and the agent holds 0 Fuji USDC (the 20 is in treasury). The four judged
+milestones run on the card rail and never touch the facilitator, so this is
+harmless for the submission. If the x402 rail is demoed at all, move some
+Fuji USDC to the agent first.
+
+---
+
+## Swap A2 — XSGD itself (the funding asset)
+
+**Verified on-chain 2026-08-12:** real XSGD is at
+`0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E` on Avalanche C-Chain **mainnet**,
+symbol `XSGD`, **6 decimals**. Read directly via `probe_token()` — this is no
+longer "reportedly". There is still no public Fuji deployment.
+
+That leaves a hard constraint: `WalletService._transfer` refuses to move funds
+on any mainnet from an API endpoint, so the only chain where XSGD exists is the
+one chain where the Funding and Settlement legs cannot run. Mainnet gives a
+read-only balance and nothing else — and the balance would read 0.00 without an
+XSGD position to show.
+
+**Plan of record: deploy `infra/contracts/XSGDTest.sol` on Fuji.** Same symbol,
+same 6 decimals, whole supply minted to the treasury on deploy. It is a testnet
+stand-in and the contract name says so, so anyone reading it on snowtrace can
+see that without being told.
+
+What this does and does not claim:
+- It does NOT claim integration with StraitsX's issued asset. We minted a token
+  and named it XSGD. Say that first, before a judge says it.
+- It DOES show the pipeline moving an arbitrary configured 6-decimal token on
+  Avalanche, which is exactly what the real swap is —`STABLECOIN_CONTRACT` is
+  the only difference.
+
+**Demonstrate the claim rather than asserting it.** These two commands are the
+strongest 20 seconds available on this milestone:
+
+```
+STABLECOIN_CONTRACT=0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E \
+  X402_NETWORK=eip155:43114 python -m scripts.check_chain   # reads real XSGD
+python -m scripts.check_chain                               # the Fuji stand-in
+```
+
+The first reads StraitsX's production contract live, with no gas and no key,
+and prints `XSGD, 6 decimals`. The second is the same code on the chain where
+funds may actually move.
 
 **Verify at event:** `python -m tests.test_environment` (wallet RPC check),
 then one $0.01 vendor purchase if a facilitator is wired.
@@ -94,31 +160,65 @@ live swap.
 production). They issue XSGD/XUSD and are MAS-licensed — the "stablecoin →
 KYC'd account → card" story is literally their product.
 
-**Config flip (.env):**
+### PLANNING ASSUMPTION (decided 2026-08-12)
+
+**Assume StraitsX provides build ideas and nothing else** — no sandbox
+credentials, no testnet XSGD, no card that clears a live gateway. Everything
+below is written to that assumption. If they hand over more on the Friday it is
+a one-env-var improvement, never a rescue.
+
+Three reasons this is the right posture rather than pessimism:
+
+1. Their public product is a **Cards** API sandbox. Nothing in it is a token
+   faucet; testnet XSGD would be a separate thing built for separate reasons.
+2. XSGD is MAS-regulated e-money whose whole proposition is a 1:1 SGD reserve.
+   A testnet version has no reserve. Regulated issuers ship those less readily
+   than a developer-first issuer like Circle does for USDC.
+3. Even in the good case it lands Friday night. Anything on the critical path
+   that resolves Friday night is a hope, not a plan.
+
+**Consequences, all already true in the repo:**
+
+| | Plan of record |
+|---|---|
+| Card issuer | `CARD_ISSUER=mock` — Stripe Issuing is unavailable to SG accounts |
+| Gateway | `CHECKOUT_GATEWAY_PROFILE=bogus` — the PAN shim stays |
+| Funding asset | Fuji XSGD stand-in (Swap A2) |
+| The XSGD story | rests on OUR wiring — the balance-backed card ceiling and on-chain settlement in `a3124f6` — not on their product |
+
+**Because the shim stays, the honesty beat is compulsory, not optional.** The
+issued card never touches the transaction under `bogus`: `checkout.py` enters
+the magic PAN `"1"`, and under `mock` there is not even a simulated
+authorization. Say it before a judge finds it, and show the env var that flips
+it. Being first about this reads as rigour; being caught reads as the opposite.
+
+**`StraitsXAdapter` is an architecture exhibit, not an integration.** It is a
+working config-driven HTTP client with 10 tests proving it survives whichever
+field spellings a sandbox uses — every unknown is an env var. Pitch it as "the
+adapter is written; going live is credentials", which is true and checkable.
+Do not imply it has ever spoken to StraitsX.
+
+**Config flip, if they surprise us:**
 ```
 CARD_ISSUER=straitsx
-CHECKOUT_GATEWAY_PROFILE=real     # only if their sandbox card works on a real gateway
+CHECKOUT_GATEWAY_PROFILE=real     # only if their sandbox card clears a real gateway
 ```
 
-**Code to fill at event:** `StraitsXAdapter` in `backend/services/cards.py` —
-5 methods against the `CardIssuer` ABC (issue / get_details / cancel /
-list_transactions / healthcheck). Mock + Stripe adapters are the reference
-implementations either side of it.
+**Booth questions — trimmed.** The old list of seven assumed an integration
+sprint that is no longer planned. Ask only what could still change the demo,
+and do not spend event time on the rest:
 
-**Booth questions (ask Friday night):**
-1. Sandbox base URL + auth scheme (API key? HMAC-signed requests? OAuth?)
-2. Virtual card create endpoint: can a spend limit be set per card? Per-auth
-   or total? (maps to `spending_limits` in our adapter)
-3. Card credential retrieval: API-fetchable PAN/CVC in sandbox? (we never
-   persist them — need live fetch)
-4. Card termination endpoint (single-use disposal after checkout)
-5. Transactions/authorizations list per card (receipt view)
-6. Funding leg: sandbox XUSD/XSGD mint or test balance? Webhook on card auth?
-7. Does their sandbox card work against Shopify's real card gateway, or do we
-   keep the Bogus profile and simulate?
+1. Is there a testnet XSGD deployment, or can sandbox XSGD be minted?
+   (The only answer that would replace the Swap A2 stand-in.)
+2. Would a sandbox card clear a real card gateway? (The only answer that
+   would remove the PAN shim.)
 
-**Fallback:** `CARD_ISSUER=mock` + Bogus gateway — the full pipeline runs
-offline; pitch the adapter architecture with the StraitsX mapping on a slide.
+Everything else — auth scheme, limit granularity, PAN retrieval, terminate vs
+freeze — is already absorbed by env vars and the tolerant field reader. There
+is nothing to learn at the booth that the adapter does not already handle.
+
+**Fallback:** none needed. The assumption above IS the fallback, and the full
+pipeline runs on it offline.
 
 ---
 

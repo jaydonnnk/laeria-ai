@@ -42,13 +42,24 @@ anyway.
 - Reddit research, signal filtering, and LLM synthesis — the whole Mode 1/2/3
   pipeline runs against genuine Reddit content.
 - x402 payments — real EIP-712 signatures, real facilitator verification, real
-  on-chain settlement on Base Sepolia.
+  on-chain settlement.
 - Mandate enforcement — spend caps, category and vendor scoping, confirmation
   thresholds, and the approved-amount clamp are all enforced in code and
   covered by `backend/tests/test_mandate.py`.
-- Card issuance — Stripe Issuing test mode issues a genuine virtual card with a
-  real spending limit, and cancels it after one attempt.
-- Browser checkout — Playwright drives a real Shopify storefront end to end.
+- Stablecoin-backed cards — a card cannot be issued for more than the agent's
+  on-chain balance. The wallet balance is one of the ceilings the card limit is
+  the minimum of, alongside the verified price, the approved amount and the
+  mandate caps. An unreadable balance refuses.
+- On-chain settlement — a completed order transfers the total from the agent
+  wallet to the merchant, and the tx hash lands on the receipt beside the order
+  reference. Failure is recorded, not raised: the receipt reads "ordered, not
+  settled" rather than pretending the purchase didn't happen.
+- Card issuance — the `CardIssuer` interface with three implementations. Stripe
+  Issuing test mode issues a genuine virtual card with a real spending limit and
+  cancels it after one attempt.
+- Browser checkout — Playwright drives a real Shopify storefront end to end,
+  re-reading the order total from the live DOM and refusing before card entry
+  if it exceeds the approved ceiling.
 
 **Composited for the demo:**
 
@@ -56,8 +67,22 @@ anyway.
   profile the storefront receives Shopify's Bogus Gateway magic PAN rather than
   the issued card number, and a matching authorization is then created on the
   real card via `stripe.test_helpers`. The authorization on the card is real;
-  no money has moved through a card network. Set
-  `CHECKOUT_GATEWAY_PROFILE=real` for the live-card path.
+  no money has moved through a card network. Under `CARD_ISSUER=mock` there is
+  not even that authorization — the issued card and the order are two events
+  that happened near each other. Set `CHECKOUT_GATEWAY_PROFILE=real` for the
+  live-card path; a Shopify dev store exposes only the Bogus Gateway, so that
+  needs a merchant whose processor we control.
+- **The funding asset is a testnet stand-in.** Real XSGD is at
+  `0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E` on Avalanche C-Chain mainnet
+  (verified on-chain: symbol `XSGD`, 6 decimals) and there is no public Fuji
+  deployment. `WalletService` refuses to move funds on any mainnet from an API
+  endpoint, so the funding and settlement legs run against
+  `infra/contracts/XSGDTest.sol` on Fuji — same symbol, same decimals, whole
+  supply minted to the treasury. `STABLECOIN_CONTRACT` is the only difference
+  between it and the issued asset; `python -m scripts.check_chain` reads either.
+- **The card issuer is a mock by default.** Stripe Issuing is not enabled on
+  the account and does not cover Singapore. `StraitsXAdapter` is a working
+  config-driven client with 10 tests, but it has never spoken to StraitsX.
 - **The storefront is ours.** A Shopify dev store we control, with a limited
   catalogue. There is no supply side; a consensus pick that the store does not
   stock hits an empty state.
@@ -105,8 +130,9 @@ python -m scripts.capture_corpus --verify   # prove it replays with no network
 | LLM          | OpenRouter                                                 |
 | Reddit       | `old.reddit.com` HTML + record/replay corpus              |
 | Obsidian     | Local REST API plugin (localhost:27124)                   |
-| Payments     | x402 (Coinbase SDK, Base Sepolia) + Stripe Issuing        |
-| Checkout     | Playwright against a Shopify dev store                    |
+| Chain        | Avalanche Fuji (XSGD stand-in) — Base Sepolia as fallback  |
+| Payments     | x402 (Coinbase SDK) + disposable virtual cards             |
+| Checkout     | Playwright against a Shopify dev store                     |
 
 Single-tenant: the backend runs on the Supabase service-role key and gates
 every request on `OWNER_USER_ID`. Multi-user requires threading a `user_id`

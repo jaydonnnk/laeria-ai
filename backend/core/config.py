@@ -113,16 +113,18 @@ class Settings(BaseSettings):
     # services/wallet.py carries a default (USDC everywhere it is known), and
     # these override it without a code change.
     #
-    # This exists because the StraitsX hackathon judges funding in XSGD, whose
-    # contract address and decimals are only obtainable from StraitsX at the
-    # event — so the swap has to be three env vars set at 11pm, not an edit to
-    # a dict literal. An empty/zero value means "use the network default".
+    # This exists because the StraitsX hackathon judges funding in XSGD, so the
+    # swap has to be env vars set at 11pm, not an edit to a dict literal. An
+    # empty/zero value means "use the network default".
     #
-    # XSGD on Avalanche C-Chain mainnet is reportedly
-    # 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E; no public Fuji deployment was
-    # found. Confirm both the address AND the decimals at the booth — 6 is the
-    # assumption below and an wrong guess silently misreports every balance by
-    # orders of magnitude.
+    # VERIFIED on-chain 2026-08-12 via WalletService.probe_token: XSGD is at
+    # 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E on Avalanche C-Chain MAINNET,
+    # symbol XSGD, 6 decimals. Still no public Fuji deployment — the testnet
+    # stand-in in infra/contracts/XSGDTest.sol exists for that reason.
+    #
+    # STABLECOIN_DECIMALS is now a fallback rather than the source of truth:
+    # WalletService reads decimals() off the contract and only falls back here
+    # when the RPC is unreachable. Leave it blank unless you have a reason.
     stablecoin_contract: str = ""
     stablecoin_symbol: str = ""
     stablecoin_decimals: int = 0
