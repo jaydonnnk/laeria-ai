@@ -270,12 +270,31 @@
     if (host) return root;
     host = document.createElement("div");
     host.id = "laeria-overlay-host";
+
+    // The host element lives in the PAGE's DOM, not the shadow tree, so the
+    // shop's own CSS can style it and `:host` rules lose that fight — a
+    // `:host { all: initial }` was silently beaten to display:none. Inline
+    // styles with !important are the only declaration a page cannot outrank
+    // without !important of its own.
+    for (const [prop, value] of [
+      ["all", "initial"],
+      ["display", "block"],       // must come after `all`, which resets it
+      ["position", "static"],
+      ["visibility", "visible"],
+      ["opacity", "1"],
+    ]) {
+      host.style.setProperty(prop, value, "important");
+    }
+
     root = host.attachShadow({ mode: "open" });
     const style = document.createElement("style");
     style.textContent = CSS;
     root.append(style, document.createElement("div"));
     root.lastElementChild.className = "root";
-    document.documentElement.appendChild(host);
+
+    // Inside <body>, not <html>: a div appended as a sibling of <body> is
+    // hidden outright by some themes and by the UA in some conditions.
+    (document.body || document.documentElement).appendChild(host);
     return root;
   }
 
