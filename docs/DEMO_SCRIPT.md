@@ -14,9 +14,18 @@ on the stage laptop before submitting. Companion doc: `HACKATHON_SWAP.md`
 4. `.env`: `BROWSER_HEADED=true` (audience watches the agent's browser),
    restart backend after the change.
 5. Log in at localhost:3000, open `/commerce`, keep `/actions` in a second tab.
-6. Mandate on `/actions`: per-txn **$50**, monthly **0** (no cap), ask-first
-   **$30**, autonomous **ON**. ($30 threshold makes the demo purchase land in
-   approval — the human-in-the-loop beat.)
+6. Mandate on `/actions`: per-txn **$50**, monthly **$500**, ask-first **$30**,
+   autonomous **ON**. (The ask-first threshold below the price is what makes
+   the purchase land in approval — the human-in-the-loop beat.)
+
+   **Do NOT set monthly to 0.** This instruction used to read "monthly 0 (no
+   cap)", which was true before Phase A and is now a demo-killer: an unset or
+   zero cap means ZERO allowance, not unlimited, so every purchase would be
+   refused on stage. There is deliberately no value meaning "no limit".
+
+   Whatever you set, ask-first must sit **below** the product's price and
+   per-txn **above** it, or you get the wrong beat: too low a per-txn cap
+   refuses the purchase outright instead of parking it for approval.
 7. Shopify admin → Orders open in a background tab (proof beat).
 8. Screen recording running (Win+G Game Bar or OBS) — this run doubles as the
    fallback video if a later attempt dies.
