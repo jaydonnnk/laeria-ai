@@ -1,126 +1,107 @@
 # Session Transfer
 
-Session of 2026-08-03 → 08-06. Started at `d08a6b4`, ends at `fa1a6c3` (13 commits, ~4,400 lines excluding fixtures). Synced — local and origin/master match.
+Session of 2026-08-06. Started at `e2eab6d`, ends at `c1869e1` (11 commits, ~1,900 lines). **Not pushed** — commits are waiting for the GUI Sync button.
 
 ## Completed
 
-- **Adversarial review triaged and Phase A executed.** An external critique (`CRITIQUE.md`) was verified line by line against the code, then addressed per `docs/REMEDIATION_PLAN.md`. Two real mandate bypasses were closed: the approved amount never bounded a purchase (execution compared the live price against itself), and an unset spending cap meant *unlimited* rather than zero.
-- **Reddit shutoff survived.** Reddit announced on 2026-06-30 that logged-out `old.reddit.com` access ends within the month — the app's only data source. A record/replay layer at the HTTP boundary plus a captured 63-request corpus means the demo cannot 403 on stage. Live capture still worked when taken.
-- **Reddit Data API applied for and denied** (ticket 18183736, 2026-08-03), citing unspecified non-compliance and/or missing detail. No legal, durable data path exists.
-- **Landing rebuilt** to lead with Reddit research rather than the payment rail, then widened from purchases to decisions generally.
-- **Frontend deployed** — `https://laeria-ai.vercel.app`, all three `NEXT_PUBLIC_*` values verified correct by reading them out of the shipped bundle.
-- **All five authed pages verified with real data** for the first time, desktop and mobile, via a hand-captured browser session.
-- **Root cause found for intermittent request failures** that had appeared as CORS errors across three runs on different pages: stale pooled HTTP/2 connections to Supabase.
-- **Research made ~2x faster and cacheable**; long research moved off the HTTP request onto a job queue.
-- **Sign-up shipped and confirmed working end to end by the user**, with Google OAuth and email/password. Research modes are open to any signed-in account; payments remain owner-only.
+- **The event's sponsor list was wrong in this repo, and the plan was built on it.** Verified against the Luma listing: the StraitsX Agentic Playground Hackathon is hosted by StraitsX with Avalanche as title partner, AWS as cloud partner, and SMU as venue. **Kite is not involved.** Kite is descoped to a slide in both `SESSION_TRANSFER` and Swap C.
+- **Four judged milestones recorded** — Funding (XSGD into a KYC'd account), Discovery, Issuance, Execution. Three of the four are already built on the card rail; the gap is the funding leg.
+- **The Fuji facilitator question is settled without needing DevRel.** Probing `/supported` showed Ultravioleta DAO serves x402Version 2, scheme `exact`, network `eip155:43113`, USDC `0x5425890298…` — matching what `payment.py` and `wallet.py` already expect. One env var, no account, no API key.
+- **Funding token is configurable** (`STABLECOIN_CONTRACT` / `_SYMBOL` / `_DECIMALS`), so XSGD is an env change rather than a code edit. Avalanche C-Chain mainnet added with no default token. `fund_agent`'s mainnet refusal moved from a hardcoded Base chain id to the network's `testnet` flag.
+- **The `/cards/test-issue` bypass is closed.** `APP_ENV=production` is now set on Render (verified: `/health` reports `production`), and the Commerce page's test-issue form is removed.
+- **Browser extension built and working** — MV3, loaded unpacked, verdict overlay on product pages and order import on confirmation pages. Detection verified against three live stores.
+- **`GET /research/subreddits`** added, reusing the research planner, because `POST /monitor/items` requires at least one subreddit.
+- **The cause of 2–3 minute reports was found and fixed.** It was not model speed — see Traps.
+- **Models benchmarked** on the real synthesis prompt and corpus.
+- **`StraitsXAdapter` implemented** as a working config-driven HTTP client with 10 tests.
+- **JSON salvage rewritten** — 11 tests.
+- **Demo-script landmine fixed** — the pre-stage checklist would have refused every purchase on stage.
+- **Fuji USDC faucet succeeded** — treasury `0x3aDe6336e45c37a41193aEcb9b02315eA59268d0` holds 20 USDC, confirmed on-chain.
+- 52 backend tests pass; frontend build clean with `/decision` still prerendered static.
 
 ## Decisions
 
-- **Mandate stays the policy layer; enforcement moves later.** (Superseded 2026-08-06: Kite is not a partner of this event — see Hackathon Spec.) Kite Agent Passport was investigated in depth and maps near 1:1 onto `ActionMandate` (`max_amount_per_tx`, `max_total_amount`, `ttl_seconds`, x402 `allowed_endpoints`). Deferred rather than integrated: its docs ship as Claude Skills + a `kpass` CLI (`github.com/gokite-ai/passport-skills`), the model appears to be a *local* agent with browser approval rather than a hosted service acting for many users, and the Windows install is a plausible day-loss given Smart App Control history.
-- **Payments owner-only, research multi-user.** The agent wallet key, Stripe cardholder and storefront session are single global instances; data scoping cannot separate them, so only the auth level can.
-- **Corpus replay over a logged-in scraper.** Logged-in `old.reddit` would still work, but it is the exact behaviour Reddit's policy names and risks an account ban.
-- **Disclosed current scraping in the API application.** Concealing it would violate the policy outright and risk permanent revocation; the disclosure was probably decisive in the denial, and the same call would be made again.
-- **`/research` kept its name** while `/decision` became "Worth it?". Its copy was already decision-general and "How it went" is lifted verbatim from its own classifier prompt — renaming would have been churn.
-- **Fuji deprioritised.** Base Sepolia is the default network; Fuji was an Avalanche flourish and its faucet is the one genuinely needing a sponsor coupon.
-- **x402 payments are gasless for the payer** (EIP-3009, facilitator submits), so the agent's existing $19.94 USDC is enough. Only `wallet.fund_agent` needs gas — reframing faucets from blocking to optional.
+- **Kite descoped rather than integrated.** Not a partner, and two findings closed it independently: the "one env var" integration was never established (Kite documents scheme `gokite-aa` on chain 2368 while the code registers standard `exact`, and Kite is absent from Coinbase's network list), and a hosted service cannot hold per-user passports — developer mode, where the service pays and bills its customers, is the only server-shaped option.
+- **Haiku 4.5 recommended over both DeepSeek and Sonnet, on spread rather than median.** The user waits on the slower of two parallel synthesis halves, so tail latency costs more than mean. `deepseek-v4-pro` was explicitly rejected: erratic (16.6–50.0s) and it found **zero** red flags on a corpus where every other model found 2–4. The user chose to test DeepSeek first with the timeout fix applied, isolating the two changes.
+- **Reddit request count left alone** at the user's choice — cutting searches would worsen the thin-coverage problem for ~5s against an LLM that varies by 30s.
+- **The extension is a thin client.** `content.js` holds no credentials; `background.js` is the only place with a token, which also means MV3 `host_permissions` cover its fetches and no backend CORS change was needed.
+- **Not submitted to the Chrome Web Store.** Review takes weeks and gates nothing for a demo.
+- **The demo runs locally, not from the deployed stack**, because `BROWSER_HEADED=true` only means something when the browser is on the presenter's screen — the visible checkout is the strongest beat and is invisible in a Render container.
+- **`CARD_ISSUER=mock` accepted as the demo issuer.** Stripe Issuing is not enabled on the account, and Stripe's live local issuance covers 22 countries not including Singapore. This is reframed as the argument for StraitsX rather than a workaround.
 
 ## Traps
 
-- **Binding a user in a FastAPI dependency does not work.** A ContextVar set there never reaches the endpoint — every threadpool dispatch copies the context. Unit tests that call the dependency and the repository in one context confirm the wrong thing and pass. Verified empirically: the endpoint reads the default. `BaseHTTPMiddleware` is equally unusable, raising *"Token was created in a different Context"*. Only raw ASGI middleware works. The temptation is to "fix" the reset; the propagation is what is broken.
-- **`npx next build` while the dev server runs clobbers `.next`** and every page 404s on `/_next/static/*`. This produced three false 0/10 verification runs before being fixed. `npm run build:check` now writes elsewhere; the temptation is to assume the app broke.
-- **`networkidle` never settles on a deployed Next app** (RSC prefetch keeps chattering). It timed out at 60s on a page that loads in 0.3s. The temptation is to treat the timeout as a real failure.
-- **Automated page checks pass on functionally broken pages.** Mobile nav was entirely missing and scored 10/10 — no console errors, no failed requests, plenty of text. Screenshots caught it; the checks never would.
-- **Never call an authenticated endpoint without a session.** `api.request()` force-redirects to `/login` on 401, so a `/me` call in `Header` — whose hooks run even when it returns `null` — threw every signed-out visitor off the landing page.
-- **The OpenAI SDK defaults to a 600s timeout.** An intermittent stall left a job "running" indefinitely, indistinguishable from slow work. Diagnosed only via a thread dump.
-- **Playwright fails from PowerShell** with `WinError 5` on the node driver, while succeeding from Git Bash. Fourth thing Smart App Control has broken here, after `bitarray`, `ckzg`, `regex`.
-- **`save_login --refresh` used to report success over a still-expired token.** Supabase access tokens last ~1h, shorter than a working session; it now verifies the token it produced.
+- **`:host` rules lose to page CSS.** The shadow host lives in the page's DOM, so a shop's stylesheet outranks `:host { all: initial }`. The overlay was `display: none` on the demo store while working on two other Shopify sites. Only inline styles set with `!important` survive. The temptation is to debug detection — detection was fine every time.
+- **`OPENROUTER_MODEL` in `.env` overrides the code default.** Production was running `deepseek/deepseek-v4-flash`, not the `anthropic/claude-sonnet-4.5` in `config.py`. Profiling attributed to "Sonnet" for some time was DeepSeek. Print `get_settings().openrouter_model` rather than reading the file.
+- **Client retries multiply the timeout.** `max_retries=2` against a 120s timeout is a six-minute worst case for one call, while `_synthesise` abandoned the half at 150s. A model with a good median and a bad tail (287s observed) therefore produced slow half-briefs. Any caller-side deadline must derive from `timeout × attempts`, not be guessed separately.
+- **A greedy `\{.*\}` cannot salvage malformed JSON.** Spanning the first brace to the last reproduces a stray leading brace, failing on exactly the input it exists to rescue.
+- **A monthly cap of 0 refuses everything.** `DEMO_SCRIPT.md` told the presenter to set it, which was correct before Phase A. The temptation is to read "0" as "no cap".
+- **Overlapping paced requests only pays when latency exceeds the gap.** The old `_pace` slept the remainder, so latency already counted toward it; measured saving is 0.0s at 1.5s latency and 20s at 4.0s. Do not claim it as the fix for slowness.
+- **A product title is not a Reddit query.** Marketing titles match almost no thread, which triggers the no-candidates retry — roughly double the time for a low-confidence answer about nothing.
+- **Shopify emits `ProductGroup`, not `Product`,** for anything with variants, which is most of a real catalogue.
+- **The demo store is Shopify's fictional sample catalogue.** Every research verdict against it is legitimately low-confidence, which looks identical to the pipeline failing.
+- **Bash heredocs in this environment mangle `\\` to `\`.** A regex test appeared to fail until the assertion was re-run against the real source file. Test the shipped file, not a retyped copy.
 
 ## Working Agreements
 
-- The user asks "is this feasible?" and "confirm with me first" before build-heavy work, and expects an assessment with tradeoffs rather than an immediate start. Approval is explicit and per-item.
-- Commits are left ready for a GUI **Sync** button, never pushed. Claude must not be added as co-author.
-- The user reallocates work explicitly ("I WON'T be doing 2-4") and expects the list to be re-scoped without argument — one flag on the risk, then move on.
-- Corrections are wanted plainly. When a claim is wrong, the expectation is to say so and move, not to hedge.
-- Loaded language about the user's own project is unwelcome in the repo (`CRITIQUE.md`'s "it's stolen" was reworded on request).
-- The user pushes back on over-narrow scoping ("not every query is a purchase") and expects the underlying code to be checked before renaming.
+- The user asks for numbered, plainly-explained steps and says so when an explanation is too compressed.
+- Measurement is expected over speculation. Answers like "would model X be faster?" are wanted as benchmarks, not opinions.
+- "Be brutal about it" is meant literally — a proposal's fatal flaw is wanted before its merits.
+- The user challenges premises ("is there any point in doing this instead of the real site?") and expects the reasoning, not restated instructions.
+- Corrections to Claude's own earlier claims are expected to be stated plainly and immediately, without hedging.
 
 ## Files Changed
 
 Backend:
-- `core/current_user.py:1-95` — new. ContextVar + `CurrentUserMiddleware` (raw ASGI). Docstring records why dependency and BaseHTTPMiddleware binding both fail.
-- `core/auth.py:88-160` — split into `_validate` / `peek_user_id` / `require_user` / `require_owner`; token-validation cache bounded by the token's own `exp`.
-- `db/repositories.py:22-35` — `_owner()` now resolves to the request's user; the 17 call sites are untouched.
-- `db/client.py:1-100` — 5s keepalive expiry and a transport that replays a dead pooled connection **for GET/HEAD/OPTIONS only**, so a dropped write can't duplicate.
-- `api/routes/actions.py:134-250` — approved-amount clamp with re-park on price drift, on both rails; `None` caps in headroom math; live vendor re-check.
-- `api/routes/research.py:57-155` — `/act` gated to owner; `/decision/submit`, `/retrospective/submit`, `/jobs/{id}`.
-- `agents/research_agent.py` — synthesis split into two parallel calls (`_VERDICT_SYSTEM` / `_SCRUTINY_SYSTEM`, `confidence` deliberately kept with `red_flags`); cache read/write; plan caching for replay.
-- `services/reddit.py:105-190`, `services/reddit_fixtures.py` — record/replay incl. recorded failures.
-- `services/jobs.py`, `services/research_cache.py` — new.
-- `services/llm.py:17-31` — explicit 120s timeout.
-- `services/payment.py:88-135`, `services/bazaar.py:23-35` — mainnet signing off unless `X402_ALLOW_MAINNET`.
-- `core/models.py:121-136` — mandate caps are `float | None`; unset means zero allowance.
-- `scripts/{save_login,verify_pages,capture_corpus}.py` — new tooling.
-- `tests/{test_mandate,test_auth_cache,test_tenancy}.py` — 41 tests. Tenancy tests drive the real app through `TestClient` deliberately.
+- `core/config.py:24-46` — `openrouter_model` default → Haiku 4.5; `llm_timeout_seconds` 120→45; new `llm_max_retries`. `:91-113` — `stablecoin_contract/_symbol/_decimals`. `:120-142` — StraitsX settings block.
+- `services/llm.py:17-40` — retries from settings, `worst_case_seconds` exposed. `:150-205` — `_balanced_objects()` scanner replacing the greedy regex in `_parse_json_lenient`.
+- `services/wallet.py:1-100` — network table gains `token`/`token_symbol`/`token_decimals`/`testnet`; Avalanche mainnet entry with no default token. `:75-95` — env overrides + `_units`. `:130-190` — `fund_agent` refuses off the `testnet` flag; response carries `token_symbol`; legacy `usdc` keys retained.
+- `services/cards.py:247-400` — `StraitsXAdapter` implemented; `_first()` tolerant field reader.
+- `services/reddit.py:96-115` — `_pace` reserves a slot and sleeps outside the lock.
+- `agents/research_agent.py:33-40` — `_FETCH_CONCURRENCY`. `:230-250` — searches run through a pool. `:281-301` — new `_fetch_threads`. `:390` — synthesis deadline derives from `worst_case_seconds`.
+- `api/routes/research.py:88-112` — new `GET /research/subreddits`.
+- `tests/test_straitsx_adapter.py`, `tests/test_json_salvage.py` — new, 21 tests.
 
 Frontend:
-- `app/page.tsx` — landing rewritten (Reddit-led), then widened to decisions; `gate()` routes signed-out visitors to `/signup?next=`.
-- `app/signup/page.tsx`, `app/auth/callback/page.tsx`, `components/GoogleButton.tsx` — new.
-- `components/Header.tsx:24-60` — public-route guard around the `/me` call; owner-only nav filtering; mobile nav row.
-- `lib/api.ts:8-60,110-130` — retry for reads, `runJob` submit+poll, `me()`.
-- `app/commerce/page.tsx` — per-section error notices with retry, replacing one page-wide banner.
-- `next.config.js:1-21`, `package.json` — `build:check` writes to `.next-check`.
+- `app/decision/page.tsx:52-95` — `run` split into `runQuery`; `?q=` read from `window.location` and auto-run.
+- `app/commerce/page.tsx:365-380` — token symbol from balances. `:516-560` — test-issue form removed.
+- `lib/api.ts:271-275` — `testIssueCard` removed. `:305-335` — `token_*` fields added to `WalletBalances`.
 
-## Hackathon Spec
+Extension (new): `manifest.json`, `background.js`, `content.js`, `config.js`, `popup.html`, `popup.js`, `README.md`.
 
-From the Luma listing (2026-08-06). The published problem statements land at the Friday 1830 brief and may narrow these.
-
-Four milestones, framed as the lifecycle of one payment:
-
-| Milestone | Spec | laeria today |
-|---|---|---|
-| Funding | Move SGD stablecoins (XSGD) into a KYC'd account | ✗ USDC on Base Sepolia; nothing knows XSGD exists |
-| Discovery | Agent receives a purchase instruction, scans an e-commerce site, locates the item | ✓ `StorefrontService.search_products` + `verify_product` |
-| Issuance | A disposable virtual card is dynamically issued to the agent | ✓ `services/cards.py`; card cancelled in `finally` |
-| Execution | The agent completes checkout using the virtual card | ✓ `services/checkout.py`, Playwright on Shopify |
-
-"Solutions will showcase $XSGD on Avalanche Network."
-
-Two readings that change the work:
-
-- **The x402 rail is not what is judged.** Read literally, XSGD/Avalanche is the *funding* leg — stablecoin into a KYC'd account that backs the card — and the card is what pays the merchant. The nearest existing code is `wallet.py`'s treasury→agent transfer, not the x402 payment path.
-- **Reddit research is not a milestone.** "Discovery" means scanning an e-commerce site. The consensus engine is a differentiator layered on top of the required flow, not a dependency of it — which makes the unresolved data source much less threatening to the submission than to the business.
-
-Open questions for the Friday booth, in priority order: is the XSGD demo on testnet or mainnet (mainnet XSGD on Avalanche C-Chain is `0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E`, and a mainnet demo means real money plus the `X402_ALLOW_MAINNET` guard); the XSGD Fuji contract address (no public deployment found); StraitsX sandbox base URL and auth scheme; card create / limit / cancel / PAN-retrieval endpoints; which Avalanche x402 facilitator is blessed, if not self-hosting `x402-rs`.
+Docs: `HACKATHON_SWAP.md` — Swap A facilitator resolved, Swap C descoped. `DEMO_SCRIPT.md:6` — monthly-cap instruction corrected.
 
 ## Open Work
 
-- **Data source is unresolved and is the binding constraint.** The API application was denied; a reply to ticket 18183736 asking which element failed is drafted but unsent. Paid providers (Apify/Data365) resell the same scraping and remain unpriced. Diversifying to sources with real APIs (YouTube, Hacker News, Stack Exchange) is unexplored. Everything about the product's durability depends on this; the demo does not, because of the frozen corpus.
-- **Kite is not a sponsor of this event and is descoped to a slide.** Verified 2026-08-06 against the Luma listing: partners are Avalanche (title), AWS (cloud), Convergence Summit, and SMU Fintech / SMU AI (venue), hosted by StraitsX. Kite appears nowhere. Two further findings from the docs: the `X402_EXTRA_NETWORKS` "cheap version" is not established — Kite's service-provider guide documents scheme `gokite-aa` on `kite-testnet` (chain 2368, facilitator `facilitator.pieverse.io`), while the code registers the standard `exact` scheme, and Coinbase's x402 network list does not include Kite. And per-user passports are ruled out rather than merely unverified: Kite's only hosted shape is "developer mode", where *"you pay for services on behalf of customers and charge them through your own billing… the only mode where end users do NOT need a Kite Passport."* Personal use requires a device-bound passkey and a local command-running agent. This matches what `docs/HACKATHON_SWAP.md` already scoped as Swap C, slide-only.
-- **Faucets not done.** Both wallets show `0.000000 ETH gas`; treasury holds $0.06 USDC. This blocks only the live "Fund" step — the stepper already shows Fund complete from the agent's existing balance, and x402 payments need no gas.
-- **`APP_ENV` is unset on Render**, so production reports `env: development` and `/cards/test-issue` — the one issuance path that bypasses the mandate pipeline — is NOT disabled there. It is `require_owner`-gated and Stripe is in test mode, so this is not an open hole, but the guard at `api/routes/cards.py:37` is inert in production. Setting `APP_ENV=production` closes it and also disables the Commerce page's test-issue button, so decide which is wanted before flipping.
-- **Background monitoring is owner-only.** `items_due_for_check()` filters by user and the worker runs unbound; a guest's on-demand "check now" works.
-- **`thread_embeddings` has no `user_id` and no RLS** — the one shared table, now that other accounts exist. It is also still write-only; nothing reads it.
-- **Demo-day items the user has declined:** fallback video and dress rehearsals. Demo day would be the first full run.
-- **StraitsX sandbox** needs business verification, expected at the event.
+- **The dress run is incomplete.** It reached step 11 (extension verdict) after three blocking bugs were fixed mid-run. Steps 12–19 — agent verify, propose, approve, Playwright checkout, order import, and the four proof checks — have never been executed in any configuration. This is the largest untested surface and it covers three of the four judged milestones.
+- **The store catalogue blocks the approval beat.** 13 products: `selling-plans-ski-wax` at $24.95, then nothing until $600. No product sits in the $30–50 band, and all are Shopify's fictional sample data, so no product in the store can produce a high-confidence verdict. Adding real products would resolve both at once; the dress run can proceed meanwhile with ask-first lowered to $20.
+- **DeepSeek timing results were never collected.** The choice between DeepSeek and Haiku depends on them. `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` and `OPENROUTER_MODEL` on Render have not been confirmed set.
+- **The `?q=` full-report link still re-researches** rather than hitting the 24h cache. Render's ephemeral disk wiping `backend/.cache/research` is the leading suspicion, untested.
+- **Order import is untested.** The Shopify thank-you selectors are guesses; the JSON-LD `Order` path is the durable one. Depends on the dress run reaching step 16.
+- **Fuji AVAX is blocked by a circular gate** — the faucet wants a coupon or a nonzero mainnet balance, and Avalanche Support requires a mainnet balance before issuing a coupon. This blocks only `wallet.fund_agent`; x402 payments are gasless via the facilitator.
+- **The extension's "full report" and "open monitor" links are hardcoded to `laeria-ai.vercel.app`** rather than following the configured backend, so they point at production during a local demo.
+- Unchanged from before: `thread_embeddings` has no `user_id` and no RLS; background monitoring is owner-only; the Reddit data source remains unresolved.
 
 ---
 
 ## Prompt for New Chat
 
-This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and can complete purchases under a spending mandate. It is the submission for the **StraitsX Agentic Playground Hackathon** (Singapore, 14 Aug 1800 – 16 Aug 1300, 2026; submission deadline Sunday 1100). Hosted by StraitsX. Partners: Avalanche (title), AWS (cloud), Convergence Summit, SMU Fintech / SMU AI (venue). Prize pool S$7,500; teams up to 3. **Kite is not involved** — an earlier version of this document listed it as a sponsor and that was wrong.
+This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and completes purchases under a spending mandate. It is the submission for the **StraitsX Agentic Playground Hackathon** (Singapore, 14 Aug 1800 – 16 Aug 1300 2026, submission Sunday 1100). StraitsX hosts; Avalanche is title partner. **Kite is not involved** — an earlier version of this document wrongly listed it as a sponsor, and a week of planning was built on that error before it was caught.
 
-Frontend is live at `https://laeria-ai.vercel.app`; backend at `https://laeria-ai-backend.onrender.com`. Everything is committed and synced at `fa1a6c3`. 41 backend tests pass and the production build is clean.
+The judged flow is four milestones: Funding (XSGD into a KYC'd account), Discovery, Issuance, Execution. Discovery, Issuance and Execution are already built on the card rail. The gap is Funding, which wants XSGD on Avalanche rather than USDC on Base Sepolia. Reddit research is not a judged milestone, which makes the unresolved data source far less threatening to the submission than to the business.
 
-The last session responded to an adversarial code review (`CRITIQUE.md`, plan in `docs/REMEDIATION_PLAN.md`). Two mandate bypasses are closed: the approved amount now bounds a purchase and re-parks for approval if the live price drifts past tolerance, and an unset spending cap now means zero allowance rather than unlimited. Base mainnet signing is off unless explicitly enabled. Research is cached and ~2x faster, long research runs as a polled job rather than inside the HTTP request, and sign-up is live with Google and email/password — the user has confirmed both work.
+Everything is committed at `c1869e1` and **unpushed**. 52 backend tests pass. Frontend builds clean.
 
-Research modes are open to any signed-in account; `/commerce`, `/actions`, `/wallet`, `/store`, `/obsidian` and `/research/act` are owner-only, because the agent wallet key, Stripe cardholder and storefront session are single global instances that data scoping cannot separate.
+This session fixed the cause of 2–3 minute research reports: not model speed, but `max_retries=2` against a 120s timeout multiplying into a six-minute worst case, while the synthesis deadline gave up at 150s. Timeout is now 45s with one retry, and the deadline derives from the client's own worst case. `OPENROUTER_MODEL` in `.env` overrides the code default — production was on `deepseek/deepseek-v4-flash`, not Sonnet. Benchmarked on the real prompt: Haiku 4.5 22.8–24.6s with 4 red flags, deepseek-v4-flash 17.3–18.6s with 2, deepseek-v4-pro 16.6–50.0s with **zero**, sonnet-4.5 35.0–47.1s with 3. The user opted to test DeepSeek first with the timeout fix alone.
 
-The binding constraint is the data source. Reddit is closing logged-out `old.reddit.com` access, which is the app's only input, and a Data API application was denied on 2026-08-03. A frozen 63-request corpus (`REDDIT_SOURCE=live_then_fixture`) means the demo cannot fail on stage, but no legal durable source exists.
+A browser extension now exists in `extension/`, loaded unpacked. It puts a verdict pill on product pages and offers to import order confirmations into monitoring. It is a thin client — `content.js` holds no credentials, `background.js` owns the token. Three bugs were fixed during the first live test: the overlay was hidden because `:host` rules lose to the shop's own CSS (inline `!important` styles now), product titles were being sent as Reddit queries verbatim (a `cleanQuery` step now cuts them down), and malformed model JSON with a stray leading brace killed a run (the salvage path is now a brace-balanced scanner rather than a greedy regex).
 
-Several environment facts cost real time last session. A ContextVar set inside a FastAPI dependency never reaches the endpoint, so per-request user binding lives in raw ASGI middleware — `BaseHTTPMiddleware` raises "Token was created in a different Context". Running `npx next build` while the dev server is up clobbers `.next` and makes every page 404 on static chunks; `npm run build:check` exists to avoid that. Playwright works from Git Bash but fails from PowerShell with `WinError 5`. Supabase access tokens expire in about an hour, and `python -m scripts.save_login --refresh` renews a saved session without another sign-in.
+`StraitsXAdapter` is a working config-driven HTTP client rather than a stub — every unknown about their sandbox is an env var, and responses are read through a tolerant field reader that accepts several plausible spellings. Stripe Issuing turned out not to be enabled on the account, and Stripe's live local issuance covers 22 countries not including Singapore, so `CARD_ISSUER=mock` is the demo issuer. That is now the argument for StraitsX rather than a workaround.
 
-Automated page checks have twice passed on functionally broken pages, so `scripts/verify_pages.py` writes screenshots that are worth looking at rather than trusting the score.
+The Avalanche facilitator question was settled by probing rather than asking: Ultravioleta DAO at `https://facilitator.ultravioletadao.xyz` serves x402Version 2, scheme `exact`, network `eip155:43113` with the same USDC contract the code already has. Fuji USDC is funded (20 in treasury); Fuji AVAX is blocked by a circular gate and affects only the live Fund step.
 
-Kite Agent Passport was researched but not integrated, and is now descoped to a slide because Kite is not a partner of this event — see Hackathon Spec above. Faucets remain undone, which affects only the live "Fund" demo step. The user has declined to record a fallback video or run dress rehearsals.
+The demo runs **locally** — backend on `localhost:8000`, frontend on `localhost:3000`, `BROWSER_HEADED=true` — because the audience watching the agent drive checkout is invisible in a Render container. A dress run following `docs/DRESS_RUN` steps in the prior conversation reached step 11 of 19 before stopping; the checkout, order import and proof checks have never run end to end. The demo store holds 13 fictional Shopify sample products with nothing between $24.95 and $600, so no product in it can yield a high-confidence verdict, and none sits in the $30–50 band the approval beat wants.
+
+`docs/DEMO_SCRIPT.md` previously instructed setting the monthly cap to 0, which after Phase A means zero allowance and would have refused every purchase on stage. That is corrected.
 
 Wait for instructions before taking any action.
