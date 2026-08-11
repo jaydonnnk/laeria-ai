@@ -53,6 +53,72 @@ def _mandate() -> ActionMandate:
     return ActionMandate(**repo.get_mandate())
 
 
+def _stablecoin_backing(required: float) -> float:
+    """The agent's on-chain stablecoin balance, as a spending ceiling.
+
+    Raises MandateViolation when the balance cannot cover the purchase, or
+    cannot be read at all. Both are refusals rather than failures: "the agent
+    cannot spend what it does not hold" is a spending rule, and it belongs in
+    the same category as the mandate caps, with the same fail-closed direction
+    the rest of this module uses — an unknown balance is zero allowance, never
+    unlimited.
+
+    UNITS: the balance is in token units and `required` is in the storefront's
+    currency, and this compares them 1:1. That is exact when the store prices
+    in the token's peg (an SGD store against XSGD) and approximate otherwise.
+    The refusal message names the token symbol so a mismatch is visible on
+    screen rather than buried in a constant — no FX rate is invented here.
+    """
+    from services.payment import MandateViolation
+    from services.wallet import WalletService
+
+    try:
+        balances = WalletService().balances()
+        agent = balances["agent"]
+    except Exception as exc:  # noqa: BLE001
+        raise MandateViolation(
+            f"cannot read the agent's stablecoin balance ({exc}) — refusing to "
+            "issue a card when nothing is known to back it"
+        ) from exc
+
+    if agent.get("error"):
+        raise MandateViolation(
+            f"cannot read the agent's stablecoin balance: {agent['error']} — "
+            "refusing to issue a card when nothing is known to back it"
+        )
+
+    symbol = balances.get("token_symbol") or "tokens"
+    balance = float(agent.get("token") or 0.0)
+    if balance + 1e-9 < required:
+        raise MandateViolation(
+            f"agent wallet holds {balance:.2f} {symbol} but this purchase needs "
+            f"{required:.2f} — fund the agent before it can buy"
+        )
+    return balance
+
+
+def _settle_on_chain(amount: float) -> dict:
+    """Move `amount` of the stablecoin agent → merchant for a completed order.
+
+    Never raises. The caller invokes this only once the order already exists,
+    at which point the purchase is a fact and the only open question is
+    whether the chain leg succeeded — so a failure is a field in the receipt,
+    not an exception that would relabel a bought item as a crash. The
+    distinction is visible on the receipt: a settlement with `error` set is an
+    honest "ordered, not yet settled", which is a true statement about the
+    world and a recoverable one.
+    """
+    from services.wallet import WalletService
+
+    try:
+        out = WalletService().settle_purchase(amount)
+        logger.info("settled %.2f on-chain: %s", amount, out["tx_hash"])
+        return {"settled": True, **out}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("on-chain settlement failed (order already placed): %s", exc)
+        return {"settled": False, "error": str(exc), "amount_usd": round(amount, 2)}
+
+
 def _execute(action_id: str, target_url: str, approved_usd: float = 0.0) -> dict:
     """Pay the target and mark the action executed. Failure marks it failed.
 
@@ -218,6 +284,12 @@ def _execute_card_purchase(action: dict) -> dict:
             spent_this_month=repo.executed_spend_this_month(),
             vendor=vendor_host(action.get("target") or ""),
         )
+        # What actually backs this card. Until this existed the funding rail
+        # and the card rail were strangers: the agent's wallet could hold
+        # nothing at all and a card would still be issued against the mandate
+        # alone. A card the stablecoin cannot cover is an unbacked credit line,
+        # which is the one thing this architecture is supposed not to be.
+        backing = _stablecoin_backing(actual)
     except MandateViolation as exc:
         repo.update_action(action_id, {"status": "cancelled",
                                        "metadata": {**meta, "mandate_violation": str(exc)}})
@@ -248,6 +320,11 @@ def _execute_card_purchase(action: dict) -> dict:
         headrooms.append(
             mandate_now.max_per_month - repo.executed_spend_this_month()
         )
+    # The stablecoin backing is a spending limit like every other one here, so
+    # it belongs in the same min() rather than in a check of its own. This is
+    # what makes "the card is backed by the wallet" a property of the code
+    # instead of a claim in a pitch.
+    headrooms.append(backing)
     ceiling = round(max(min(headrooms), 0.0), 2)
     issuer = get_issuer()
     issued = None
@@ -302,6 +379,12 @@ def _execute_card_purchase(action: dict) -> dict:
             except Exception as exc:  # noqa: BLE001
                 logger.error("card cancel after checkout failed: %s", exc)
 
+    # On-chain settlement of what was just bought. Runs AFTER the order exists,
+    # so its failure is RECORDED, never raised: the goods are paid for and the
+    # action genuinely is executed. Letting a gas hiccup here mark a completed
+    # purchase "failed" would be a worse lie than an unsettled receipt.
+    settlement = _settle_on_chain(result.total_usd)
+
     return repo.update_action(
         action_id,
         {
@@ -310,6 +393,7 @@ def _execute_card_purchase(action: dict) -> dict:
             "metadata": {
                 **meta,
                 "rail": "card",
+                "settlement": settlement,
                 "order_reference": result.order_reference,
                 "gateway_profile": result.gateway_profile,
                 "pan_shim": result.pan_shim,
@@ -399,17 +483,14 @@ def propose_action(req: ProposeRequest) -> dict:
         from services.storefront import StorefrontService
 
         try:
-            matches = [
-                p for p in StorefrontService().search_products(limit=50)
-                if p["handle"] == req.product_handle
-            ]
+            product = StorefrontService().get_product(req.product_handle)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=502, detail=f"price discovery failed: {exc}"
             ) from exc
-        if not matches:
+        if not product:
             raise HTTPException(status_code=404, detail="product not found in store")
-        amount = float(matches[0]["price_usd"])
+        amount = float(product["price_usd"])
         if amount <= 0:
             raise HTTPException(status_code=502, detail="product has no readable price")
     else:

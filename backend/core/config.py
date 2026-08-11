@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     # own x402 vendor until real x402 merchants exist — swap when they do.
     action_vendor_url: str = "http://127.0.0.1:8000/vendor/deep-report"
 
+    # Who receives the stablecoin when a card purchase settles on-chain. Empty
+    # falls back to the treasury, which is the demo's merchant and is already
+    # the x402 vendor's payTo. Named separately because "the wallet that funds
+    # the agent" and "the wallet that gets paid" are different roles that only
+    # happen to be the same address in a single-operator demo.
+    merchant_settlement_address: str = ""
+
     # Avalanche Fuji testnet (hackathon rail swap; see docs/HACKATHON_SWAP.md)
     avalanche_fuji_rpc_url: str = "https://api.avax-test.network/ext/bc/C/rpc"
 

@@ -40,6 +40,9 @@ def _parse_item(item: dict) -> dict | None:
     if not accepts:
         return None
     acc = accepts[0]
+    # 1e6 is right here and NOT a stale hardcode: this scales a third party's
+    # listing in THEIR asset (Bazaar listings are USDC, 6 decimals), not ours.
+    # Our own token's decimals come from wallet.configured_token_decimals.
     try:
         amount_usd = int(acc.get("amount") or acc.get("maxAmountRequired") or 0) / 1_000_000
     except (TypeError, ValueError):

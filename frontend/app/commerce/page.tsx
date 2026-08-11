@@ -596,6 +596,42 @@ function ExecutionLog({ onExecuted }: { onExecuted: (n: number) => void }) {
     load();
   }, [load]);
 
+  // The on-chain half of the receipt. An order reference proves goods were
+  // bought; this proves the stablecoin that backed the card actually paid for
+  // them. An unsettled purchase says so plainly rather than hiding — the order
+  // is real either way, and "ordered, not settled" is a true statement.
+  function SettlementLine({ settlement }: { settlement: unknown }) {
+    const s = settlement as
+      | {
+          settled?: boolean;
+          tx_hash?: string;
+          explorer_url?: string;
+          token_symbol?: string;
+          amount_usd?: number;
+        }
+      | undefined;
+    if (!s || typeof s !== "object") return null;
+    if (!s.settled) {
+      return <span className="text-warning">ordered, not settled on-chain</span>;
+    }
+    return (
+      <span>
+        settled{" "}
+        <b className="text-ink">
+          {(s.amount_usd ?? 0).toFixed(2)} {s.token_symbol ?? ""}
+        </b>{" "}
+        <a
+          href={s.explorer_url}
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-2 hover:text-ink"
+        >
+          {(s.tx_hash ?? "").slice(0, 12)}…
+        </a>
+      </span>
+    );
+  }
+
   async function loadShots(a: PayAction) {
     const paths = (a.metadata?.checkout_screenshots as string[]) ?? [];
     try {
@@ -645,6 +681,7 @@ function ExecutionLog({ onExecuted }: { onExecuted: (n: number) => void }) {
                   {a.metadata?.pan_shim === true && (
                     <span className="text-ink-subtle">bogus-gateway PAN shim (declared)</span>
                   )}
+                  <SettlementLine settlement={a.metadata?.settlement} />
                 </div>
               )}
               {refused && (

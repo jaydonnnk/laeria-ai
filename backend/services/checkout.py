@@ -80,10 +80,34 @@ def shipping_from_settings() -> ShippingProfile:
     )
 
 
+# A money gate that only understands one currency is a money gate that stops
+# working the moment the store is repriced. The old pattern hardcoded `$`, so
+# an SGD store returned None on every read — safe, but the checkout could
+# never run at all. Currency markers are listed most-specific-first so "S$"
+# wins over a bare "$".
+_CURRENCY = (
+    r"(?:S\$|R\$|HK\$|NT\$|A\$|C\$|NZ\$|[$€£¥₹]|"
+    r"(?:SGD|USD|EUR|GBP|MYR|AUD|CAD|NZD|HKD|JPY|INR|CNY)\b)"
+)
+# Cents are required. A total is always written with them, and demanding them
+# is what stops "Total 2 items" from being read as a price.
+_MONEY_RE = re.compile(_CURRENCY + r"\s*([\d,]+\.\d{2})")
+
+# How far past the label to look. Wide enough for "Total  SGD $24.95" with
+# markup-derived whitespace between, tight enough not to reach the next row
+# of the order summary.
+_MONEY_WINDOW = 120
+
+
 def _money_after(label_pattern: str, text: str) -> float | None:
     """Find the first currency amount following a label ("Total", ...) in
-    rendered page text. Theme-markup-independent by design."""
-    m = re.search(label_pattern + r"[^$]*\$\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+    rendered page text. Theme-markup-independent and currency-independent by
+    design; returns None when no *currency-marked* amount follows the label,
+    which the callers treat as "refuse to proceed"."""
+    label = re.search(label_pattern, text, re.IGNORECASE)
+    if not label:
+        return None
+    m = _MONEY_RE.search(text[label.end() : label.end() + _MONEY_WINDOW])
     if not m:
         return None
     try:

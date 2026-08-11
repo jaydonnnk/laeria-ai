@@ -123,6 +123,23 @@ class StorefrontService:
         products.sort(key=lambda p: (not p["available"], p["price_usd"]))
         return products[:limit]
 
+    def get_product(self, handle: str) -> dict | None:
+        """One product by handle, fetched directly.
+
+        A handle is an identifier, so it deserves a lookup rather than a scan.
+        The caller that needed this was filtering a *paginated listing* for a
+        known handle, which quietly returns "not found" for any product past
+        the page limit — correct on a 13-product dev store, wrong on any real
+        catalogue. Returns None when the store has no such product.
+        """
+        try:
+            raw = self._get(f"/products/{handle}.json").json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+        return self._parse_product(raw.get("product") or {})
+
     def _parse_product(self, item: dict) -> dict | None:
         variants = item.get("variants") or []
         if not variants:

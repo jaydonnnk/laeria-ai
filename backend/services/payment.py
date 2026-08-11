@@ -351,10 +351,18 @@ def _decode_payment_required(resp: httpx.Response):
 
 
 def _requirement_amount_usd(req) -> float:
-    """Best-effort USD amount from a requirement (USDC has 6 decimals)."""
+    """Best-effort human-scale amount from a payment requirement.
+
+    The divisor is the configured token's decimals, not a hardcoded 1e6. This
+    number feeds the mandate check and the pay_402 ceiling, so on a token that
+    is not 6-decimal a hardcoded divisor does not merely display wrong — it
+    lets a payment through a cap it should have failed.
+    """
+    from services.wallet import configured_token_decimals
+
     raw = getattr(req, "max_amount_required", None) or getattr(req, "amount", None)
     try:
-        return float(raw) / 1_000_000
+        return float(raw) / 10 ** configured_token_decimals()
     except (TypeError, ValueError):
         return 0.0
 
