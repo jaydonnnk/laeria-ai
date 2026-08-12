@@ -196,6 +196,17 @@ Rules — integrity constraints:
   contradictory outcomes, or the threads only loosely match the decision."""
 
 
+class NoRecordedPlan(RuntimeError):
+    """`fixture` mode was asked a question the corpus has no plan for.
+
+    A distinct type because the caller must treat it as "no data for this
+    question" — an ordinary, explainable outcome of running on a frozen
+    corpus — rather than as a fault. Raised as a bare RuntimeError it reached
+    the API as a 500, which is the wrong thing to show someone who simply
+    asked something we did not record.
+    """
+
+
 class ResearchAgent:
     def __init__(
         self, reddit: RedditService | None = None, llm: LLMService | None = None
@@ -227,7 +238,18 @@ class ResearchAgent:
                 return ResearchBrief.model_validate(cached)
         # 1. Identify where to look (LLM) — including 2-3 query phrasings,
         #    because Reddit search is literal keyword matching.
-        plan = self._identify_subreddits(query)
+        #
+        # In `fixture` mode an unrecorded query has no plan, and that used to
+        # escape as a 500. A query we cannot answer is a normal outcome of
+        # running on a frozen corpus, not a server fault — it degrades to the
+        # same honest empty brief as every other "we have no data" path, so an
+        # off-script question from the audience gets an explanation instead of
+        # an error page.
+        try:
+            plan = self._identify_subreddits(query)
+        except NoRecordedPlan as exc:
+            logger.warning("no recorded plan for %r", query)
+            return _empty_brief([], str(exc))
         subreddits = plan["subreddits"][:_MAX_SUBREDDITS]
         search_queries = plan["search_queries"]
         logger.info("research plan: subs=%s queries=%s", subreddits, search_queries)
@@ -344,9 +366,11 @@ class ResearchAgent:
                     "search_queries": cached["search_queries"],
                 }
             if mode == "fixture":
-                raise RuntimeError(
-                    f"no recorded research plan for {query!r} — capture one with "
-                    "`python -m scripts.capture_corpus`"
+                raise NoRecordedPlan(
+                    "Reddit is not reachable and this exact question is not in "
+                    "the recorded corpus, so it cannot be answered right now. "
+                    "This is not a problem with your question — logged-out "
+                    "Reddit access is blocked upstream."
                 )
 
         raw = self._llm.complete_json(

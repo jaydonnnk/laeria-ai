@@ -158,9 +158,17 @@ it, and built the demo around the defense."
   string: no normalisation, so capitalisation and the `$100` both matter. Typing
   "steam deck oled worth it" instead of the line above gets nothing.
 
-  Set `REDDIT_SOURCE=fixture` for the demo. It is faster (no 403 round trip and
-  pacing sleep per request) and deterministic, and a miss now degrades to an
-  empty subreddit rather than killing the run.
+  Set `REDDIT_SOURCE=fixture` for the demo — for determinism, **not** speed.
+  Measured on a recorded query: `fixture` 48.3s, `live_then_fixture` 49.5s.
+  The 403 round trips overlap because the searches are concurrent, so both
+  modes are dominated by the two LLM calls and the difference is noise. What
+  `fixture` actually buys is that Reddit cannot affect the run at all — no
+  dependence on how it happens to be failing that minute — and an unanswerable
+  question fails in ~6s instead of grinding through a plan call and seventeen
+  doomed fetches. Note the LLM calls still need network; this removes the
+  Reddit dependency, not the internet one.
+
+  Both modes now degrade honestly on an unrecorded query. Neither errors.
 - Mandate `0` or unset = **ZERO allowance**, not "no cap". There is
   deliberately no value meaning unlimited. This line previously said the
   opposite, which is the same demo-killer already fixed once in the checklist
