@@ -1,55 +1,91 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
 /**
  * @title XSGD testnet stand-in
  *
  * Real XSGD is issued by StraitsX on Avalanche C-Chain MAINNET at
- * 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E. There is no public Fuji
- * deployment, and `WalletService._transfer` refuses to move funds on any
- * mainnet from an API endpoint — so a testnet demo of the funding and
- * settlement legs needs a token that exists on Fuji.
+ * 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E (verified on-chain: symbol
+ * "XSGD", 6 decimals). There is no public Fuji deployment, and
+ * `WalletService._transfer` refuses to move funds on any mainnet from an API
+ * endpoint -- so a testnet demo of the funding and settlement legs needs a
+ * token that exists on Fuji.
  *
  * This is that token. Same symbol and same 6 decimals as the real one, so the
- * code path exercised here is byte-for-byte the code path that runs against
- * StraitsX's contract: only STABLECOIN_CONTRACT changes.
+ * code path exercised here is the code path that runs against StraitsX's
+ * contract: only STABLECOIN_CONTRACT changes.
  *
  * The contract NAME says "test stand-in" deliberately. Anyone reading this on
  * snowtrace should be able to tell in one glance that it is not the issued
  * asset, without having to take anyone's word for it.
  *
- * Deploy from the treasury wallet — the constructor mints the whole supply to
- * the address passed in, so deploy and mint are a single transaction.
+ * DEPENDENCY-FREE ON PURPOSE. An OpenZeppelin import means the deploy path
+ * needs npm, an import remapping, and a working Remix session. Everything the
+ * backend actually calls is transfer / balanceOf / decimals / symbol, so the
+ * whole token is forty lines and `scripts/deploy_xsgd.py` can compile it from
+ * this single file with no package manager involved.
  *
- *   Network      Avalanche Fuji (chain 43113)
- *   RPC          https://api.avax-test.network/ext/bc/C/rpc
- *   Compiler     0.8.20+
- *   Constructor  treasury = X402_TREASURY_ADDRESS
- *
- * Then, in backend/.env:
- *
- *   X402_NETWORK=eip155:43113
- *   X402_FACILITATOR_URL=https://facilitator.ultravioletadao.xyz
- *   STABLECOIN_CONTRACT=<deployed address>
- *   STABLECOIN_SYMBOL=XSGD
- *   # STABLECOIN_DECIMALS stays blank — read from decimals() below
- *
- * Verify with:  python -m scripts.check_chain
+ * Deploy:  cd backend && python -m scripts.deploy_xsgd
+ * Verify:  cd backend && python -m scripts.check_chain
  */
-contract XSGDTest is ERC20 {
-    uint8 private constant DECIMALS = 6;
+contract XSGDTest {
+    string public constant name = "XSGD (Fuji test stand-in)";
+    string public constant symbol = "XSGD";
+    uint8 public constant decimals = 6;
 
-    constructor(address treasury) ERC20("XSGD (Fuji test stand-in)", "XSGD") {
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+
+    /// @param treasury receives the entire supply — deploy and mint are one
+    /// transaction, so there is no separate minting step to forget.
+    constructor(address treasury) {
         require(treasury != address(0), "treasury required");
-        _mint(treasury, 1_000_000 * 10 ** DECIMALS);
+        totalSupply = 1_000_000 * 10 ** uint256(decimals);
+        balanceOf[treasury] = totalSupply;
+        emit Transfer(address(0), treasury, totalSupply);
     }
 
-    /// @dev Real XSGD uses 6 decimals, not the ERC20 default of 18. The
-    /// backend reads this value off the contract rather than trusting config,
-    /// so getting it wrong here would misreport every balance downstream.
-    function decimals() public pure override returns (uint8) {
-        return DECIMALS;
+    function transfer(address to, uint256 value) external returns (bool) {
+        return _transfer(msg.sender, to, value);
+    }
+
+    function approve(address spender, uint256 value) external returns (bool) {
+        allowance[msg.sender][spender] = value;
+        emit Approval(msg.sender, spender, value);
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 value)
+        external
+        returns (bool)
+    {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= value, "insufficient allowance");
+        // Infinite approval is left untouched, the conventional behaviour.
+        if (allowed != type(uint256).max) {
+            allowance[from][msg.sender] = allowed - value;
+        }
+        return _transfer(from, to, value);
+    }
+
+    function _transfer(address from, address to, uint256 value)
+        private
+        returns (bool)
+    {
+        require(to != address(0), "transfer to zero address");
+        uint256 balance = balanceOf[from];
+        require(balance >= value, "insufficient balance");
+        unchecked {
+            // Both safe: the subtraction is guarded above, and the addition
+            // cannot overflow because the sum of all balances is totalSupply.
+            balanceOf[from] = balance - value;
+            balanceOf[to] += value;
+        }
+        emit Transfer(from, to, value);
+        return true;
     }
 }
