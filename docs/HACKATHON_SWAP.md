@@ -91,10 +91,26 @@ so a single 2-AVAX faucet drop is orders of magnitude more than enough.
       serves `x402Version 2 / exact / eip155:43113` with USDC
       `0x5425890298…`. It now also publishes v1 aliases (`avalanche-fuji`)
       across 114 entries; the v2 CAIP-2 entry the SDK speaks is unchanged.
-- [ ] Mainnet AVAX → treasury `0x3aDe…68d0` (**C-Chain**), then core.app faucet
-- [ ] Send 0.2 Fuji AVAX treasury → agent `0x7ecbe755…2ee5` (settlement gas)
-- [ ] Deploy `infra/contracts/XSGDTest.sol` (see below)
-- [ ] `python -m scripts.check_chain` → **CHAIN READY**
+- [x] Mainnet AVAX → treasury (**C-Chain**), then core.app faucet — done
+      2026-08-13, 2 AVAX received on Fuji. The faucet gate was confirmed live
+      before spending: *"Must either enter a valid coupon code or have an AVAX
+      balance greater than zero on mainnet C-Chain"* — no threshold, any dust
+      satisfies it.
+- [x] 1 Fuji AVAX treasury → agent `0x7ecbe755…2ee5` (settlement gas)
+- [x] **XSGD stand-in deployed 2026-08-13:**
+      `0x4C41454F440a5869cb881895C26dB9d15Ab65cfA`
+      (symbol `XSGD`, 6 decimals, 1,000,000 minted to treasury)
+      https://testnet.snowtrace.io/address/0x4C41454F440a5869cb881895C26dB9d15Ab65cfA
+- [x] `python -m scripts.check_chain` → **CHAIN READY**, all six checks
+
+**Live `.env` for the Avalanche demo:**
+```
+X402_NETWORK=eip155:43113
+X402_FACILITATOR_URL=https://facilitator.ultravioletadao.xyz
+STABLECOIN_CONTRACT=0x4C41454F440a5869cb881895C26dB9d15Ab65cfA
+STABLECOIN_SYMBOL=XSGD
+STABLECOIN_DECIMALS=          # blank — read from decimals() on the contract
+```
 
 **x402 on Fuji is USDC-only.** The facilitator lists no other token for
 `eip155:43113`. Once `STABLECOIN_CONTRACT` points at the XSGD stand-in, the

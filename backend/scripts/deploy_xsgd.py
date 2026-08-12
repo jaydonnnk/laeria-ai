@@ -120,7 +120,17 @@ def main() -> int:
     print(f"  deployer  {treasury.address}")
     print(f"  balance   {w3.from_wei(balance, 'ether')} native")
     if balance == 0:
-        print("  [FAIL] deployer has no gas — fund it before deploying")
+        # The likely cause is not an unfunded wallet but the wrong chain: the
+        # network comes from .env, and it has to be flipped BEFORE deploying
+        # rather than after, since the whole point of the deploy is to produce
+        # the token that .env will then point at.
+        print(
+            f"  [FAIL] deployer has no gas on {_TESTNETS[chain_id]}.\n"
+            f"         X402_NETWORK in .env selects the chain and is currently "
+            f"{settings.x402_network}.\n"
+            f"         For the Fuji deploy set X402_NETWORK=eip155:43113 first, "
+            "then re-run."
+        )
         return 1
 
     bytecode, abi = _compile()
