@@ -142,6 +142,25 @@ it, and built the demo around the defense."
   `infra/*_stub/`). No dependency changes at the venue without re-copying.
 - Monitor worker auto-starts (port 47931) — harmless, ignore it.
 - Storefront password rotation breaks discovery — it's in `.env`.
+- **Reddit is fully blocked. Exactly three queries work, byte-exact:**
+
+  ```
+  is the Steam Deck OLED worth it in 2026
+  best noise cancelling headphones for open office
+  best budget mechanical keyboard for programming under $100
+  ```
+
+  `old.reddit.com` now returns 403 to every logged-out request — the shutdown
+  announced 2026-06-30 has landed in full. Anything not in the recorded corpus
+  returns LOW CONFIDENCE / no consensus, which on screen looks identical to the
+  product not working. The research **plan** is part of the corpus too and only
+  three were captured, and the fixture key is a raw SHA-256 of the query
+  string: no normalisation, so capitalisation and the `$100` both matter. Typing
+  "steam deck oled worth it" instead of the line above gets nothing.
+
+  Set `REDDIT_SOURCE=fixture` for the demo. It is faster (no 403 round trip and
+  pacing sleep per request) and deterministic, and a miss now degrades to an
+  empty subreddit rather than killing the run.
 - Mandate `0` or unset = **ZERO allowance**, not "no cap". There is
   deliberately no value meaning unlimited. This line previously said the
   opposite, which is the same demo-killer already fixed once in the checklist

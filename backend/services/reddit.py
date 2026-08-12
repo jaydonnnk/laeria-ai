@@ -61,6 +61,19 @@ _BASE = "https://old.reddit.com"
 _MIN_REQUEST_GAP_SECONDS = 1.5
 
 
+class FixtureMissing(RuntimeError):
+    """No recorded answer exists for this request in `fixture` mode.
+
+    Named rather than a bare RuntimeError because callers must treat it
+    exactly like an upstream failure: a subreddit with no captured search is
+    indistinguishable, from the caller's point of view, from one that 403s.
+    Left unnamed it escaped the `except httpx.HTTPStatusError` guards and took
+    down an entire research run over one uncaptured subreddit -- which is the
+    difference between `fixture` mode being the safe demo setting and being a
+    liability.
+    """
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (429, 500, 502, 503, 504)
@@ -175,7 +188,7 @@ class RedditService:
         if mode == "fixture":
             replayed = replay_or_none()
             if replayed is None:
-                raise RuntimeError(
+                raise FixtureMissing(
                     f"no fixture for {path} {params or ''} — capture one with "
                     "`python -m scripts.capture_corpus` while live access works"
                 )
@@ -215,9 +228,51 @@ class RedditService:
             fx.save(path, params, resp.text)
         return resp
 
+    def probe_live(self) -> tuple[bool, str]:
+        """Can we reach Reddit RIGHT NOW, with no fixture fallback?
+
+        `healthcheck` cannot answer this and never could: it goes through
+        `_get`, so under the default live_then_fixture mode a total outage is
+        absorbed by a replay and reported as healthy. That is how Reddit being
+        100% blocked shows up as a PASS in test_environment while every user
+        query returns "no threads found" -- the check was structurally
+        incapable of seeing the thing it existed to detect.
+
+        Returns (reachable, detail). Never raises.
+        """
+        try:
+            resp = self._fetch_live("/r/Singapore/")
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code
+            if code in (401, 403):
+                return False, (
+                    f"HTTP {code} — logged-out old.reddit access is blocked. "
+                    "Only the recorded corpus can serve queries."
+                )
+            return False, f"HTTP {code}"
+        except Exception as exc:  # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+        if 'data-fullname="t3_' not in resp.text:
+            return False, "200 but no parseable posts — markup changed?"
+        return True, "reachable"
+
     def healthcheck(self) -> bool:
-        """Fetch a subreddit listing and confirm parseable posts come back.
-        Used by test_environment (Phase 0.4)."""
+        """Can the configured source serve a request at all — live OR replay.
+
+        Deliberately NOT the same question as `probe_live`. This one answers
+        "will the pipeline return data", which stays true on the fixture
+        corpus; that is the honest status of a demo running on replay. Callers
+        that need to know whether Reddit itself is up must ask probe_live, and
+        the log line below says which one satisfied this check so a passing
+        healthcheck can never quietly mean the wrong thing.
+        """
+        live_ok, detail = self.probe_live()
+        if live_ok:
+            return True
+        logger.warning(
+            "Reddit live access is down (%s) — healthcheck now reflects the "
+            "recorded corpus only", detail
+        )
         try:
             resp = self._get("/r/Singapore/")
             return 'data-fullname="t3_' in resp.text
@@ -307,6 +362,11 @@ class RedditService:
         except httpx.HTTPStatusError as exc:
             # Nonexistent/banned/private subreddit → empty, not fatal.
             logger.warning("search r/%s -> HTTP %s", subreddit, exc.response.status_code)
+            return []
+        except FixtureMissing as exc:
+            # Same outcome as above: this subreddit yields nothing for this
+            # query. One uncaptured sub must not cost the whole brief.
+            logger.warning("search r/%s -> %s", subreddit, exc)
             return []
 
         threads = self._parse_search_page(resp.text, limit, subreddit=subreddit)
@@ -473,6 +533,9 @@ class RedditService:
             except httpx.HTTPStatusError as exc:
                 logger.warning("scan r/%s -> HTTP %s", sub, exc.response.status_code)
                 continue
+            except FixtureMissing as exc:
+                logger.warning("scan r/%s -> %s", sub, exc)
+                continue
             found.extend(self._parse_search_page(resp.text, limit_per_sub, subreddit=sub))
         seen: set[str] = set()
         return [t for t in found if not (t.id in seen or seen.add(t.id))]
@@ -486,6 +549,9 @@ class RedditService:
             )
         except httpx.HTTPStatusError as exc:
             logger.warning("site-wide search -> HTTP %s", exc.response.status_code)
+            return []
+        except FixtureMissing as exc:
+            logger.warning("site-wide search -> %s", exc)
             return []
         return self._parse_search_page(resp.text, limit, subreddit=None)
 

@@ -34,7 +34,21 @@ def main() -> int:
 
     # Hard requirements
     from services.reddit import RedditService
-    hard_results.append(check("Reddit (old.reddit HTML fetch)", RedditService().healthcheck))
+    _reddit = RedditService()
+
+    # Two separate questions. The old single check went through _get, so under
+    # live_then_fixture a total Reddit outage was absorbed by a replay and
+    # reported as a PASS — it could not see the thing it existed to detect.
+    def _reddit_live() -> bool:
+        ok, detail = _reddit.probe_live()
+        if not ok:
+            print(f"         live access: {detail}")
+        return ok
+
+    soft_results.append(check("Reddit LIVE access (old.reddit HTML)", _reddit_live))
+    hard_results.append(
+        check("Reddit data source can serve (live or corpus)", _reddit.healthcheck)
+    )
 
     from services.llm import LLMService
     hard_results.append(check("OpenRouter (completion)", LLMService().healthcheck))

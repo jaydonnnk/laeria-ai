@@ -268,7 +268,24 @@ class ResearchAgent:
             t for t in candidates if not (t.id in seen_ids or seen_ids.add(t.id))
         ]
         if not candidates:
-            return _empty_brief(subreddits, "No Reddit threads found for this query.")
+            # "No threads found" is true but reads as "your question has no
+            # answer", which is the wrong conclusion when the real cause is
+            # that Reddit refused every request. Name the actual reason:
+            # the two cases need opposite responses from the user (rephrase
+            # vs. nothing they can do), and conflating them makes a total
+            # upstream outage look like a bad query.
+            live_ok, detail = self._reddit.probe_live()
+            note = (
+                "No Reddit threads found for this query."
+                if live_ok
+                else (
+                    f"Reddit is not serving requests right now ({detail}). "
+                    "Only previously recorded queries can be answered until "
+                    "access is restored — this is not a problem with your "
+                    "question."
+                )
+            )
+            return _empty_brief(subreddits, note)
 
         # 3. Choose which threads to actually read: engagement-ranked,
         #    spread across subreddits so one sub doesn't dominate.
