@@ -1,107 +1,295 @@
 # Session Transfer
 
-Session of 2026-08-06. Started at `e2eab6d`, ends at `c1869e1` (11 commits, ~1,900 lines). **Not pushed** — commits are waiting for the GUI Sync button.
+Session of 2026-08-12/13. Started at `d14bdb1`, ends at `29cdda1` (10 commits,
+~2,800 lines). **All pushed** — `origin/master..master` is empty.
+
+120 backend tests pass. Frontend builds clean; `/decision` still prerenders static.
 
 ## Completed
 
-- **The event's sponsor list was wrong in this repo, and the plan was built on it.** Verified against the Luma listing: the StraitsX Agentic Playground Hackathon is hosted by StraitsX with Avalanche as title partner, AWS as cloud partner, and SMU as venue. **Kite is not involved.** Kite is descoped to a slide in both `SESSION_TRANSFER` and Swap C.
-- **Four judged milestones recorded** — Funding (XSGD into a KYC'd account), Discovery, Issuance, Execution. Three of the four are already built on the card rail; the gap is the funding leg.
-- **The Fuji facilitator question is settled without needing DevRel.** Probing `/supported` showed Ultravioleta DAO serves x402Version 2, scheme `exact`, network `eip155:43113`, USDC `0x5425890298…` — matching what `payment.py` and `wallet.py` already expect. One env var, no account, no API key.
-- **Funding token is configurable** (`STABLECOIN_CONTRACT` / `_SYMBOL` / `_DECIMALS`), so XSGD is an env change rather than a code edit. Avalanche C-Chain mainnet added with no default token. `fund_agent`'s mainnet refusal moved from a hardcoded Base chain id to the network's `testnet` flag.
-- **The `/cards/test-issue` bypass is closed.** `APP_ENV=production` is now set on Render (verified: `/health` reports `production`), and the Commerce page's test-issue form is removed.
-- **Browser extension built and working** — MV3, loaded unpacked, verdict overlay on product pages and order import on confirmation pages. Detection verified against three live stores.
-- **`GET /research/subreddits`** added, reusing the research planner, because `POST /monitor/items` requires at least one subreddit.
-- **The cause of 2–3 minute reports was found and fixed.** It was not model speed — see Traps.
-- **Models benchmarked** on the real synthesis prompt and corpus.
-- **`StraitsXAdapter` implemented** as a working config-driven HTTP client with 10 tests.
-- **JSON salvage rewritten** — 11 tests.
-- **Demo-script landmine fixed** — the pre-stage checklist would have refused every purchase on stage.
-- **Fuji USDC faucet succeeded** — treasury `0x3aDe6336e45c37a41193aEcb9b02315eA59268d0` holds 20 USDC, confirmed on-chain.
-- 52 backend tests pass; frontend build clean with `/decision` still prerendered static.
+- **Strict gap analysis against the four judged milestones**, which found the
+  root problem the rest of the session addressed: the crypto rail and the card
+  rail shared an `ActionMandate` object and nothing else. No money moved
+  between them, so "XSGD funds an agentic purchase" was two demos standing
+  next to each other.
+- **The card is now backed by the wallet.** The agent's on-chain balance
+  joined the `headrooms` list the card ceiling is the `min()` of. Proven by
+  the run that exposed it: a $46.20 card had been issued against $19.94 of
+  backing.
+- **Purchases settle on-chain.** A completed order transfers its total from
+  agent to merchant and the tx hash lands on the receipt beside the order
+  reference.
+- **XSGD is live on Avalanche Fuji** at
+  `0x4C41454F440a5869cb881895C26dB9d15Ab65cfA` — symbol `XSGD`, 6 decimals,
+  1,000,000 minted to treasury. Deployed via `scripts/deploy_xsgd.py`.
+- **Avalanche is the default, not the swap.** Base Sepolia and Base mainnet
+  removed from `_NETWORKS`; Fuji is the default network with the XSGD stand-in
+  as its default token, so the standard demo needs no `STABLECOIN_*` env vars.
+- **`scripts/check_chain.py`** — six preconditions (right chain, token
+  identity, symbol agreement, gas per wallet named by what it unblocks,
+  facilitator support). Currently reports `CHAIN READY`.
+- **Discovery is agentic** (`agents/shopping_agent.py`). Free-text instruction
+  → model-derived query and budget → real browser search of the shop's own
+  search page → model picks with a reason and a rejected list. Measured 20s
+  end to end against the live store; picks the ski wax at 24.95 under a $30
+  budget with the correct variant id.
+- **Reddit diagnosed and made honest.** `old.reddit.com` now 403s every
+  logged-out request. The pipeline is fine — a recorded query still returns
+  MODERATE confidence over 8 threads.
+- Real XSGD verified on-chain at `0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E`
+  (Avalanche C-Chain mainnet, symbol XSGD, 6 decimals). Config and
+  `.env.example` previously said "reportedly".
+- Docs rewritten for the above: `HACKATHON_SWAP.md`, `DEMO_SCRIPT.md`,
+  `README.md`.
 
 ## Decisions
 
-- **Kite descoped rather than integrated.** Not a partner, and two findings closed it independently: the "one env var" integration was never established (Kite documents scheme `gokite-aa` on chain 2368 while the code registers standard `exact`, and Kite is absent from Coinbase's network list), and a hosted service cannot hold per-user passports — developer mode, where the service pays and bills its customers, is the only server-shaped option.
-- **Haiku 4.5 recommended over both DeepSeek and Sonnet, on spread rather than median.** The user waits on the slower of two parallel synthesis halves, so tail latency costs more than mean. `deepseek-v4-pro` was explicitly rejected: erratic (16.6–50.0s) and it found **zero** red flags on a corpus where every other model found 2–4. The user chose to test DeepSeek first with the timeout fix applied, isolating the two changes.
-- **Reddit request count left alone** at the user's choice — cutting searches would worsen the thin-coverage problem for ~5s against an LLM that varies by 30s.
-- **The extension is a thin client.** `content.js` holds no credentials; `background.js` is the only place with a token, which also means MV3 `host_permissions` cover its fetches and no backend CORS change was needed.
-- **Not submitted to the Chrome Web Store.** Review takes weeks and gates nothing for a demo.
-- **The demo runs locally, not from the deployed stack**, because `BROWSER_HEADED=true` only means something when the browser is on the presenter's screen — the visible checkout is the strongest beat and is invisible in a Render container.
-- **`CARD_ISSUER=mock` accepted as the demo issuer.** Stripe Issuing is not enabled on the account, and Stripe's live local issuance covers 22 countries not including Singapore. This is reframed as the argument for StraitsX rather than a workaround.
+- **The Shopify storefront stays.** Deleting it was requested, then withdrawn
+  once the constraint was clear: a sandbox-issued card only authorises against
+  a gateway we control, and real merchants add 3DS plus bot defences. The
+  storefront is not scaffolding — it is the only place the card can clear.
+- **Mainnet AVAX purchased to unlock the faucet** rather than asking the
+  community. The user declined the community route as too uncertain to
+  schedule around. Faucet gate confirmed live before spending: a coupon *or*
+  any nonzero mainnet C-Chain balance, no threshold.
+- **A self-deployed Fuji stand-in over mainnet read-only.** XSGD exists only
+  on Avalanche mainnet, where `_transfer` refuses by design, so the only chain
+  carrying the asset is the one chain the funding leg cannot run on. Framed as
+  a rehearsed config swap, not an integration — and the mainnet contract is
+  read live on stage to demonstrate rather than assert it.
+- **Deploy from a script, not Remix.** Remix needs four things to agree before
+  a byte compiles; its Environment silently defaulted to WalletConnect, whose
+  hardcoded chain list has no Avalanche at all.
+- **The contract dropped its OpenZeppelin import.** That import is what forces
+  npm, a remapping and a working Remix session into the deploy path. Everything
+  the backend calls is `transfer`/`balanceOf`/`decimals`/`symbol`.
+- **Assume StraitsX supplies build ideas and nothing else.** Their public
+  product is a Cards sandbox, not a token faucet; XSGD is regulated e-money
+  whose proposition is a reserve a testnet version would not have; and anything
+  arriving Friday night is a hope, not a plan.
+- **Base removed entirely rather than demoted.** Requested. Consequence
+  recorded in `HACKATHON_SWAP.md`: there is no longer a Base Sepolia fallback,
+  and the doc previously instructed the presenter to use one.
+- **Discovery scans the browser, with the JSON catalogue as fallback** (the
+  "Option B" of two offered). Matches the milestone wording literally and lets
+  the audience watch the agent search. A degraded run is badged
+  "catalogue fallback" rather than presented as a scan.
+- **Settlement never raises.** It runs after the order exists, so a chain
+  failure is a receipt field reading "ordered, not settled on-chain", not an
+  exception that would relabel a bought item as a crash.
+- **`py-solc-x` deliberately out of `requirements.txt`** — the service image
+  has no reason to carry a Solidity compiler.
 
 ## Traps
 
-- **`:host` rules lose to page CSS.** The shadow host lives in the page's DOM, so a shop's stylesheet outranks `:host { all: initial }`. The overlay was `display: none` on the demo store while working on two other Shopify sites. Only inline styles set with `!important` survive. The temptation is to debug detection — detection was fine every time.
-- **`OPENROUTER_MODEL` in `.env` overrides the code default.** Production was running `deepseek/deepseek-v4-flash`, not the `anthropic/claude-sonnet-4.5` in `config.py`. Profiling attributed to "Sonnet" for some time was DeepSeek. Print `get_settings().openrouter_model` rather than reading the file.
-- **Client retries multiply the timeout.** `max_retries=2` against a 120s timeout is a six-minute worst case for one call, while `_synthesise` abandoned the half at 150s. A model with a good median and a bad tail (287s observed) therefore produced slow half-briefs. Any caller-side deadline must derive from `timeout × attempts`, not be guessed separately.
-- **A greedy `\{.*\}` cannot salvage malformed JSON.** Spanning the first brace to the last reproduces a stray leading brace, failing on exactly the input it exists to rescue.
-- **A monthly cap of 0 refuses everything.** `DEMO_SCRIPT.md` told the presenter to set it, which was correct before Phase A. The temptation is to read "0" as "no cap".
-- **Overlapping paced requests only pays when latency exceeds the gap.** The old `_pace` slept the remainder, so latency already counted toward it; measured saving is 0.0s at 1.5s latency and 20s at 4.0s. Do not claim it as the fix for slowness.
-- **A product title is not a Reddit query.** Marketing titles match almost no thread, which triggers the no-candidates retry — roughly double the time for a low-confidence answer about nothing.
-- **Shopify emits `ProductGroup`, not `Product`,** for anything with variants, which is most of a real catalogue.
-- **The demo store is Shopify's fictional sample catalogue.** Every research verdict against it is legitimately low-confidence, which looks identical to the pipeline failing.
-- **Bash heredocs in this environment mangle `\\` to `\`.** A regex test appeared to fail until the assertion was re-run against the real source file. Test the shipped file, not a retyped copy.
+- **`rtk` is not installed in this environment.** The global CLAUDE.md
+  prescribes prefixing every command with it; doing so fails with
+  `rtk: command not found`. Use the bare command.
+- **web3's `build_transaction` fills the gas limit from the account balance
+  when the gas price is near zero.** Observed on Fuji (base fee 10 wei):
+  3.1e15 against a true estimate of 420,480, eight orders past the 32M block
+  limit, so the node rejects it. Estimate explicitly and floor the price. The
+  temptation is to read the absurd number as an RPC bug — `eth_gasPrice`
+  returning 160 wei is genuine.
+- **Shopify serves the same product three ways and they disagree.**
+  `/products.json` has `available`; `/products/{h}.json` **omits** it;
+  `/products/{h}.js` has it and prices in **cents**. A lookup added to fix
+  pagination used the middle one, so every product read as sold out and the
+  shopping agent refused to buy anything. Also: `.js` top-level `price` is the
+  *cheapest* variant, not `variants[0]`.
+- **`X402_NETWORK` must be flipped BEFORE deploying** — it selects the chain
+  deployed to. `STABLECOIN_CONTRACT` can only be set after. The walkthrough
+  originally had both after, and the first real deploy attempt pointed at Base
+  Sepolia and refused for lack of gas.
+- **MetaMask's "Import account" does not exist during onboarding.** A wallet
+  shell must be created first; "I have an existing wallet" wants a seed
+  phrase, not a private key. The seed backs up only Account 1, never the
+  imported account.
+- **Exchange withdrawals must select Avalanche C-Chain**, not X-Chain — the
+  faucet reads C-Chain only.
+- **Reddit: exactly three query strings work, byte-exact.** The research
+  *plan* is part of the recorded corpus, only three were captured, and the
+  fixture key is a raw SHA-256 of the query with no normalisation, so
+  capitalisation and `$100` both matter. The temptation is to debug the
+  pipeline — it is fine.
+- **`DEMO_SCRIPT.md`'s trap list said mandate `0` means "no cap".** The exact
+  inversion already fixed once in the checklist above it, and it would have
+  refused every purchase on stage for a second time.
+- **Two claims made this session were wrong and corrected by measurement.**
+  `REDDIT_SOURCE=fixture` was described as faster — measured 48.3s vs 49.5s,
+  noise, because the doomed fetches overlap. And the checkout was described as
+  never having run end to end, taken from a stale `SESSION_TRANSFER` line;
+  `screenshots/checkout/` holds three complete sets from Jul 20.
+- **`demo_e2e --buy` places a real order** on the live Shopify store. It is
+  not a test double — same code path as the UI, minus the approval pause,
+  which it skips by temporarily raising the mandate.
+- **`laeria-ai.vercel.app` is a separate deployment.** Local `.env` edits do
+  not reach it; its backend is Render. The demo runs locally because
+  `BROWSER_HEADED=true` is meaningless in a container.
 
 ## Working Agreements
 
-- The user asks for numbered, plainly-explained steps and says so when an explanation is too compressed.
-- Measurement is expected over speculation. Answers like "would model X be faster?" are wanted as benchmarks, not opinions.
-- "Be brutal about it" is meant literally — a proposal's fatal flaw is wanted before its merits.
-- The user challenges premises ("is there any point in doing this instead of the real site?") and expects the reasoning, not restated instructions.
-- Corrections to Claude's own earlier claims are expected to be stated plainly and immediately, without hedging.
+- **Root cause over symptom, stated explicitly.** The user asks directly
+  whether a fix addresses architecture or papers over it, and expects the
+  distinction called out per item.
+- **Commits carry no `Co-Authored-By` trailer.** The user presses Sync in a
+  GUI — commit locally, never push.
+- **Judgement calls are delegated, then verified.** "Make ur judgement call"
+  is common; the expectation is a decision plus the reasoning that would
+  change it, not a menu.
+- **Say plainly what is the user's job and what is the agent's.** Purchases,
+  KYC, CAPTCHAs and Shopify admin are theirs; they ask for that split.
+- **Explanations get flagged when too dense.** "Hard to understand" was said
+  once; the rewrite that worked led with the human-level problem and kept code
+  identifiers out of the explanation.
+- **Measure rather than assert.** Both corrections above came from being asked
+  to verify a claim that had been stated confidently.
 
 ## Files Changed
 
 Backend:
-- `core/config.py:24-46` — `openrouter_model` default → Haiku 4.5; `llm_timeout_seconds` 120→45; new `llm_max_retries`. `:91-113` — `stablecoin_contract/_symbol/_decimals`. `:120-142` — StraitsX settings block.
-- `services/llm.py:17-40` — retries from settings, `worst_case_seconds` exposed. `:150-205` — `_balanced_objects()` scanner replacing the greedy regex in `_parse_json_lenient`.
-- `services/wallet.py:1-100` — network table gains `token`/`token_symbol`/`token_decimals`/`testnet`; Avalanche mainnet entry with no default token. `:75-95` — env overrides + `_units`. `:130-190` — `fund_agent` refuses off the `testnet` flag; response carries `token_symbol`; legacy `usdc` keys retained.
-- `services/cards.py:247-400` — `StraitsXAdapter` implemented; `_first()` tolerant field reader.
-- `services/reddit.py:96-115` — `_pace` reserves a slot and sleeps outside the lock.
-- `agents/research_agent.py:33-40` — `_FETCH_CONCURRENCY`. `:230-250` — searches run through a pool. `:281-301` — new `_fetch_threads`. `:390` — synthesis deadline derives from `worst_case_seconds`.
-- `api/routes/research.py:88-112` — new `GET /research/subreddits`.
-- `tests/test_straitsx_adapter.py`, `tests/test_json_salvage.py` — new, 21 tests.
+- `services/wallet.py:1-120` — module docstring and `_NETWORKS` rewritten;
+  Base entries removed, Fuji default token is the XSGD stand-in, Avalanche
+  mainnet carries real XSGD. `:98-125` — new `is_testnet()` and
+  `configured_token_decimals()`. `:167-215` — `_token_decimals` reads
+  `decimals()` off the contract, uncached on failure. `:228-270` — new
+  `chain_id`, `expected_chain_id`, `probe_token`, `native_balance`;
+  `usdc`/`usdc_contract` keys removed from `balances()`. `:280-400` — transfers
+  collapsed into one `_transfer()` carrying the mainnet refusal; `fund_agent`
+  rewritten onto it; new `settle_purchase()`.
+- `api/routes/actions.py:56-100` — new `_stablecoin_backing()`. `:102-125` —
+  new `_settle_on_chain()`, never raises. `:290-300` — backing check inside the
+  execute-time recheck. `:330-345` — `headrooms.append(backing)`. `:400-420` —
+  settlement call and `settlement` metadata. `:470-478` — propose uses
+  `get_product` instead of scanning a paginated listing.
+- `services/storefront.py:126-200` — new `browser_search()`,
+  `_handle_from_href()`, `get_product()` on `.js`, `_parse_product_js()`.
+- `agents/shopping_agent.py` — new, 275 lines.
+- `services/checkout.py:83-115` — currency-agnostic `_money_after`.
+- `services/payment.py:1-20, 128-155` — docstring, and the mainnet guard now
+  derives from `is_testnet` rather than Base's chain id. `:360-375` —
+  `_requirement_amount_usd` uses configured decimals, not `1e6`.
+- `services/reddit.py:64-78` — new `FixtureMissing`. `:218-265` — new
+  `probe_live()`; `healthcheck` documents which source satisfied it.
+  `:349-360, 529-540, 546-556` — `FixtureMissing` caught alongside HTTP errors.
+- `agents/research_agent.py:199-210` — new `NoRecordedPlan`. `:228-245` —
+  plan miss degrades instead of 500ing. `:280-300` — empty-result note names
+  the Reddit block.
+- `scripts/check_chain.py`, `scripts/deploy_xsgd.py` — new.
+- `scripts/demo_e2e.py:54-90` — chain preflight replaces the RPC healthcheck.
+- `core/config.py:79-86` — Avalanche defaults. `:100-112` — new
+  `merchant_settlement_address`.
+- `tests/` — five new files: `test_checkout_money`, `test_wallet_decimals`,
+  `test_stablecoin_backing`, `test_settlement`, `test_shopping_agent`,
+  `test_storefront_parse`. `test_environment.py:36-50` — Reddit split into
+  live-access (soft) and can-serve (hard).
 
 Frontend:
-- `app/decision/page.tsx:52-95` — `run` split into `runQuery`; `?q=` read from `window.location` and auto-run.
-- `app/commerce/page.tsx:365-380` — token symbol from balances. `:516-560` — test-issue form removed.
-- `lib/api.ts:271-275` — `testIssueCard` removed. `:305-335` — `token_*` fields added to `WalletBalances`.
+- `app/commerce/page.tsx:34-36, 119-146` — shopping-agent state and handlers.
+  `:200-235` — agent instruction form, manual search demoted to `<details>`.
+  `:600-680` — new `SettlementLine` and `ShopResult`. `:455-470` — amount field
+  denominated in the token symbol.
+- `lib/api.ts:261-275` — `storeShop`. `:303-320` — `usdc` keys removed.
+  `:389-420` — `ShopPick`/`ShopRejection`.
+- `app/actions/page.tsx:126, 379-383` — XSGD on Avalanche; Bazaar note reframed
+  as third-party chains.
 
-Extension (new): `manifest.json`, `background.js`, `content.js`, `config.js`, `popup.html`, `popup.js`, `README.md`.
-
-Docs: `HACKATHON_SWAP.md` — Swap A facilitator resolved, Swap C descoped. `DEMO_SCRIPT.md:6` — monthly-cap instruction corrected.
+Infra: `infra/contracts/XSGDTest.sol` — new, dependency-free ERC-20.
 
 ## Open Work
 
-- **The dress run is incomplete.** It reached step 11 (extension verdict) after three blocking bugs were fixed mid-run. Steps 12–19 — agent verify, propose, approve, Playwright checkout, order import, and the four proof checks — have never been executed in any configuration. This is the largest untested surface and it covers three of the four judged milestones.
-- **The store catalogue blocks the approval beat.** 13 products: `selling-plans-ski-wax` at $24.95, then nothing until $600. No product sits in the $30–50 band, and all are Shopify's fictional sample data, so no product in the store can produce a high-confidence verdict. Adding real products would resolve both at once; the dress run can proceed meanwhile with ask-first lowered to $20.
-- **DeepSeek timing results were never collected.** The choice between DeepSeek and Haiku depends on them. `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES` and `OPENROUTER_MODEL` on Render have not been confirmed set.
-- **The `?q=` full-report link still re-researches** rather than hitting the 24h cache. Render's ephemeral disk wiping `backend/.cache/research` is the leading suspicion, untested.
-- **Order import is untested.** The Shopify thank-you selectors are guesses; the JSON-LD `Order` path is the durable one. Depends on the dress run reaching step 16.
-- **Fuji AVAX is blocked by a circular gate** — the faucet wants a coupon or a nonzero mainnet balance, and Avalanche Support requires a mainnet balance before issuing a coupon. This blocks only `wallet.fund_agent`; x402 payments are gasless via the facilitator.
-- **The extension's "full report" and "open monitor" links are hardcoded to `laeria-ai.vercel.app`** rather than following the configured backend, so they point at production during a local demo.
-- Unchanged from before: `thread_embeddings` has no `user_id` and no RLS; background monitoring is owner-only; the Reddit data source remains unresolved.
+- **Fund and Settle have never executed on Avalanche.** `check_chain` proves
+  the chain is readable, which is a different claim from a transfer signing and
+  confirming. Settlement has never run against any real chain — it shipped with
+  unit tests only. This is the largest untested surface and it sits on the two
+  highest-weighted milestones. Blocks confidence in Milestones 1 and 4.
+- **The shopping agent has not been exercised through the UI.** Verified via
+  direct calls against the live store only; the `/commerce` instruction box,
+  the reason/rejected rendering and the "Buy this" handoff into `propose` are
+  untested in a browser. Depends on nothing.
+- **Step 6 — SGD store pricing and mid-band products.** Shopify admin work,
+  the user's. Not started. The store still prices in USD while the agent is
+  funded in XSGD, and the catalogue jumps $24.95 → $600 with no product in the
+  approval-beat band. The code side is done: the checkout money parser is
+  currency-agnostic and tested.
+- **Step 7 — the honesty beat about the PAN shim.** The user's. Not started.
+  `DEMO_SCRIPT.md` carries the wording.
+- **Step 8 — own the checkout gateway** so the issued card is the card that
+  pays. Optional, not started, explicitly gated behind 6 and 7.
+- **Render env vars.** The user was updating them when the session ended;
+  unconfirmed. The deployed site showed Base Sepolia and USDC before that.
+- **Reddit access remains unsolved.** The durable fix is the official API under
+  OAuth; the credential fields exist in config and are unused, since the
+  service is HTML-only. Not a judged milestone.
 
 ---
 
 ## Prompt for New Chat
 
-This continues work on **laeria.ai** at `C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches decisions from Reddit community consensus and completes purchases under a spending mandate. It is the submission for the **StraitsX Agentic Playground Hackathon** (Singapore, 14 Aug 1800 – 16 Aug 1300 2026, submission Sunday 1100). StraitsX hosts; Avalanche is title partner. **Kite is not involved** — an earlier version of this document wrongly listed it as a sponsor, and a week of planning was built on that error before it was caught.
+This continues work on **laeria.ai** at
+`C:\Users\jayd0\OneDrive\Desktop\laeria.ai` — an agent that researches
+purchases from Reddit consensus and completes them under a spending mandate.
+It is the submission for the **StraitsX Agentic Playground Hackathon**
+(Singapore, 14–16 Aug 2026, submission Sunday 1100). StraitsX hosts; Avalanche
+is title partner. Kite is not involved and must not be mentioned.
 
-The judged flow is four milestones: Funding (XSGD into a KYC'd account), Discovery, Issuance, Execution. Discovery, Issuance and Execution are already built on the card rail. The gap is Funding, which wants XSGD on Avalanche rather than USDC on Base Sepolia. Reddit research is not a judged milestone, which makes the unresolved data source far less threatening to the submission than to the business.
+Four judged milestones: Funding, Discovery, Issuance, Execution. All four are
+implemented. Everything is committed and pushed at `29cdda1`; 120 backend
+tests pass and the frontend builds clean.
 
-Everything is committed at `c1869e1` and **unpushed**. 52 backend tests pass. Frontend builds clean.
+The session began as a gap analysis and found one root problem: the crypto rail
+and the card rail shared a mandate object and nothing else, so no money moved
+between them. Two changes closed it. The agent's on-chain balance is now one of
+the ceilings the disposable card's limit is the minimum of, so a card cannot be
+issued for more than the wallet holds. And a completed order settles on-chain,
+agent to merchant, with the tx hash on the receipt beside the order reference.
+Settlement deliberately never raises — it runs after the order exists, so a
+chain failure reads "ordered, not settled on-chain" rather than relabelling a
+bought item as a crash.
 
-This session fixed the cause of 2–3 minute research reports: not model speed, but `max_retries=2` against a 120s timeout multiplying into a six-minute worst case, while the synthesis deadline gave up at 150s. Timeout is now 45s with one retry, and the deadline derives from the client's own worst case. `OPENROUTER_MODEL` in `.env` overrides the code default — production was on `deepseek/deepseek-v4-flash`, not Sonnet. Benchmarked on the real prompt: Haiku 4.5 22.8–24.6s with 4 red flags, deepseek-v4-flash 17.3–18.6s with 2, deepseek-v4-pro 16.6–50.0s with **zero**, sonnet-4.5 35.0–47.1s with 3. The user opted to test DeepSeek first with the timeout fix alone.
+The chain moved from Base Sepolia to Avalanche. XSGD has no public Fuji
+deployment, so a stand-in was deployed at
+`0x4C41454F440a5869cb881895C26dB9d15Ab65cfA` — same symbol, same 6 decimals,
+source in `infra/contracts/XSGDTest.sol`, deployed by
+`scripts/deploy_xsgd.py` rather than Remix. Real XSGD was verified on-chain at
+`0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E` on Avalanche mainnet, where
+`_transfer` refuses by design, making that entry a read-only window. Base
+Sepolia and Base mainnet were removed from `_NETWORKS` entirely, so there is no
+longer a Base fallback. `scripts/check_chain.py` currently reports
+`CHAIN READY` across six preconditions.
 
-A browser extension now exists in `extension/`, loaded unpacked. It puts a verdict pill on product pages and offers to import order confirmations into monitoring. It is a thin client — `content.js` holds no credentials, `background.js` owns the token. Three bugs were fixed during the first live test: the overlay was hidden because `:host` rules lose to the shop's own CSS (inline `!important` styles now), product titles were being sent as Reddit queries verbatim (a `cleanQuery` step now cuts them down), and malformed model JSON with a stray leading brace killed a run (the salvage path is now a brace-balanced scanner rather than a greedy regex).
+Discovery was rebuilt as `agents/shopping_agent.py`. A free-text instruction
+becomes a query and a budget via one model call, a real browser searches the
+shop's own search page, and a second model call picks with a reason and a
+rejected list. Three guards exist because a model choosing purchases is new
+risk: a handle absent from the results is refused rather than fuzzy-matched,
+the budget is re-checked in code after the model answers, and a failed pick
+does not fall back to first-in-stock. The pick is a proposal — the mandate
+still decides whether it executes. Measured at 20 seconds against the live
+store.
 
-`StraitsXAdapter` is a working config-driven HTTP client rather than a stub — every unknown about their sandbox is an env var, and responses are read through a tolerant field reader that accepts several plausible spellings. Stripe Issuing turned out not to be enabled on the account, and Stripe's live local issuance covers 22 countries not including Singapore, so `CARD_ISSUER=mock` is the demo issuer. That is now the argument for StraitsX rather than a workaround.
+Reddit now 403s every logged-out request; the shutdown announced 2026-06-30 has
+landed. The pipeline itself is unaffected — a recorded query still returns
+MODERATE confidence over eight threads — but only three exact query strings are
+in the corpus, and the fixture key is a raw SHA-256 of the query, so they must
+be typed byte-exactly. `DEMO_SCRIPT.md` lists them.
 
-The Avalanche facilitator question was settled by probing rather than asking: Ultravioleta DAO at `https://facilitator.ultravioletadao.xyz` serves x402Version 2, scheme `exact`, network `eip155:43113` with the same USDC contract the code already has. Fuji USDC is funded (20 in treasury); Fuji AVAX is blocked by a circular gate and affects only the live Fund step.
+Fund and Settle have never executed on Avalanche, and settlement has never run
+against any real chain. The shopping agent has not been driven through the UI.
+Steps 6 (repricing the Shopify store in SGD and adding products in the
+approval-beat band) and 7 (declaring the Bogus-Gateway PAN shim on stage) are
+the user's and have not been started. Render's environment variables were being
+updated as the session ended and are unconfirmed.
 
-The demo runs **locally** — backend on `localhost:8000`, frontend on `localhost:3000`, `BROWSER_HEADED=true` — because the audience watching the agent drive checkout is invisible in a Render container. A dress run following `docs/DRESS_RUN` steps in the prior conversation reached step 11 of 19 before stopping; the checkout, order import and proof checks have never run end to end. The demo store holds 13 fictional Shopify sample products with nothing between $24.95 and $600, so no product in it can yield a high-confidence verdict, and none sits in the $30–50 band the approval beat wants.
+Two claims made during the session were wrong and corrected by measurement:
+`REDDIT_SOURCE=fixture` is not faster than `live_then_fixture`, and the
+checkout had in fact run end to end in July. The user asks for root-cause
+versus symptom to be named explicitly, delegates judgement calls and expects a
+decision with its reasoning rather than a menu, wants the split between their
+work and the agent's stated plainly, and commits without a `Co-Authored-By`
+trailer — pushing is done by the user through a GUI Sync button.
 
-`docs/DEMO_SCRIPT.md` previously instructed setting the monthly cap to 0, which after Phase A means zero allowance and would have refused every purchase on stage. That is corrected.
+Note that the global CLAUDE.md prescribes prefixing commands with `rtk`, which
+is not installed in this environment and fails with `command not found`.
 
 Wait for instructions before taking any action.
