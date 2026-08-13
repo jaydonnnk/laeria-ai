@@ -302,8 +302,6 @@ export const api = {
 
 export interface WalletParty {
   address: string;
-  /** Same number as `token`; the older key, kept so nothing breaks mid-event. */
-  usdc?: number;
   token?: number;
   native?: number;
   error?: string;
@@ -313,9 +311,9 @@ export interface WalletBalances {
   network: string;
   network_id: string;
   native_symbol: string;
-  usdc_contract: string;
-  // The funding token is configurable (STABLECOIN_* env) because the hackathon
-  // judges funding in XSGD, not USDC. Optional so an older backend still types.
+  // The funding token is whatever STABLECOIN_* configures — XSGD on Avalanche
+  // for this build. Nothing here is named after a specific asset any more; the
+  // duplicate `usdc`/`usdc_contract` keys that shadowed these are gone.
   token_contract?: string;
   token_symbol?: string;
   token_decimals?: number;

@@ -26,10 +26,9 @@ from pathlib import Path
 CONTRACT = Path(__file__).resolve().parents[2] / "infra" / "contracts" / "XSGDTest.sol"
 SOLC_VERSION = "0.8.20"
 
-# Chains this script will deploy to. Fuji is the one we use; Base Sepolia is
-# here so the fallback plan needs no edit. Anything absent is refused, which
-# is the point -- a mainnet chain id must never be reachable by typo.
-_TESTNETS = {43113: "Avalanche Fuji", 84532: "Base Sepolia"}
+# Chains this script will deploy to. Anything absent is refused, which is the
+# point -- a mainnet chain id must never be reachable by typo.
+_TESTNETS = {43113: "Avalanche Fuji"}
 
 
 def _compile() -> tuple[str, list]:

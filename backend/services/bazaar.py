@@ -2,9 +2,11 @@
 
 The Bazaar is Coinbase's public index of live x402 resources (25k+ listings:
 paid APIs, data services, tools). Discovery is free and unauthenticated via
-the CDP endpoint. Listings are effectively all mainnet (Base eip155:8453,
-some Solana/Polygon) — PAYING one requires the agent wallet to hold real
-USDC on that network; the mandate caps protect real spend.
+the CDP endpoint. These are other people's services on other people's chains:
+listings are effectively all mainnet (mostly USDC on Base, some Solana and
+Polygon), so PAYING one needs real funds on THAT network — not the XSGD this
+agent runs on. Mandate caps protect real spend, and mainnet signing stays off
+unless X402_ALLOW_MAINNET is set.
 
 Search quality note: the index's own filters are unreliable (network filter
 observed ignored), so filtering happens client-side here.
@@ -21,17 +23,21 @@ logger = get_logger(__name__)
 _DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources"
 
 # Networks our signer can actually pay on (EVM exact scheme). Must track
-# payment._signer_client, or a listing gets flagged payable and then fails at
-# signing time. Base mainnet only counts when X402_ALLOW_MAINNET is on.
+# payment._signer_client exactly, or a listing gets flagged payable here and
+# then fails at signing time.
 def payable_networks() -> set[str]:
     from core.config import get_settings
+    from services.wallet import is_testnet
 
     s = get_settings()
     nets = {s.x402_network}
-    if s.x402_allow_mainnet:
-        nets.add("eip155:8453")
     if s.x402_extra_networks:
         nets.update(n.strip() for n in s.x402_extra_networks.split(",") if n.strip())
+    # Mirrors the signer: mainnets are excluded unless explicitly allowed, so
+    # a listing is never advertised as payable when the signer would refuse to
+    # register for its network.
+    if not s.x402_allow_mainnet:
+        nets = {n for n in nets if is_testnet(n)}
     return nets
 
 

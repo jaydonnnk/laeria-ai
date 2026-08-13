@@ -60,10 +60,11 @@ AVALANCHE_FUJI_RPC_URL=https://api.avax-test.network/ext/bc/C/rpc   # already de
 **Already prepped in code:**
 - `X402_EXTRA_NETWORKS=eip155:43113` registers the signer for Fuji without
   changing the primary network (payment.py `_signer_client`) — verified builds.
-- `services/wallet.py` has the full Fuji entry (chain 43113, USDC
-  `0x5425890298aed601595a70AB815c96711a31Bc65`, snowtrace explorer) keyed off
-  `X402_NETWORK` — balances + funding transfer work the moment the env flips.
-- `bazaar.PAYABLE_NETWORKS` includes Fuji.
+- `services/wallet.py` ships Fuji as the DEFAULT network (chain 43113), with
+  the XSGD stand-in as its default token — balances, funding and settlement
+  need no env vars at all for the standard demo.
+- `bazaar.payable_networks()` derives from the configured network and excludes
+  mainnets unless `X402_ALLOW_MAINNET` is set.
 
 **Gas is required. The earlier note that it blocked only `fund_agent` is out
 of date** — on-chain settlement (agent → merchant, added 2026-08-12) is a
@@ -163,9 +164,20 @@ funds may actually move.
 **Verify at event:** `python -m tests.test_environment` (wallet RPC check),
 then one $0.01 vendor purchase if a facilitator is wired.
 
-**Fallback:** stay on Base Sepolia (`eip155:84532` + x402.org facilitator) —
-everything already works there; pitch the one-env-var swap instead of the
-live swap.
+**Fallback: there is no longer a Base Sepolia fallback, deliberately.** Base
+Sepolia and Base mainnet were removed from `_NETWORKS` on 2026-08-13 — the
+submission showcases XSGD on Avalanche, and keeping a USDC-on-Base escape
+hatch meant a wrong env var could quietly demo the wrong asset on the wrong
+chain. `WalletService` now refuses to construct for an unknown network rather
+than falling back to one.
+
+If Fuji itself fails on the night, the fallbacks are, in order:
+1. Swap the RPC (`AVALANCHE_FUJI_RPC_URL`) — the public endpoint is the most
+   likely thing to be flaky, not the chain.
+2. Point `STABLECOIN_CONTRACT` at mainnet XSGD for a read-only balance
+   display. Funding and settlement stay dead — `_transfer` refuses mainnet —
+   so narrate those legs from the recording.
+3. Play the pre-stage recording.
 
 ---
 

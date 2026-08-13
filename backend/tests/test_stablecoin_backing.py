@@ -33,7 +33,7 @@ def _patch_wallet(monkeypatch, payload: dict | None = None, boom: Exception | No
 
 def _balances(token: float, symbol: str = "XSGD", error: str = "") -> dict:
     agent = {"address": "0x" + "11" * 20, "error": error} if error else {
-        "address": "0x" + "11" * 20, "token": token, "usdc": token, "native": 0.1
+        "address": "0x" + "11" * 20, "token": token, "native": 0.1
     }
     return {"token_symbol": symbol, "agent": agent, "treasury": {}}
 
@@ -53,11 +53,11 @@ def test_exact_balance_is_enough(monkeypatch):
 def test_a_short_wallet_refuses_and_names_both_numbers(monkeypatch):
     """The real case: 19.94 held against a 32.95 order — previously issued a
     46.20 card anyway."""
-    _patch_wallet(monkeypatch, _balances(19.94, symbol="USDC"))
+    _patch_wallet(monkeypatch, _balances(19.94))
     with pytest.raises(MandateViolation) as exc:
         _stablecoin_backing(32.95)
     msg = str(exc.value)
-    assert "19.94" in msg and "32.95" in msg and "USDC" in msg
+    assert "19.94" in msg and "32.95" in msg and "XSGD" in msg
 
 
 def test_an_empty_wallet_refuses(monkeypatch):

@@ -5,13 +5,12 @@ the treasury to the agent (the on-stage "funding" moment). Talks raw JSON-RPC
 via httpx — no web3 dependency; signing uses eth_account, which the x402 layer
 already requires.
 
-Two axes are configurable, and both are event-day swaps:
-
-* Chain, off the same X402_NETWORK the payment rail uses — Base Sepolia →
-  Avalanche Fuji is one env flip for both rails.
-* Token, off STABLECOIN_CONTRACT / _SYMBOL / _DECIMALS — because the hackathon
-  judges funding in XSGD and its address is only obtainable from StraitsX at
-  the event. Nothing here assumes USDC or six decimals beyond the defaults.
+The asset is XSGD and the chain is Avalanche. Both remain configurable — the
+chain off X402_NETWORK (shared with the payment rail), the token off
+STABLECOIN_CONTRACT / _SYMBOL / _DECIMALS — but the defaults now name what
+this build actually showcases rather than something it has to be swapped away
+from. Nothing in this module assumes any particular token or decimal count;
+decimals are read from the contract itself.
 """
 
 from __future__ import annotations
@@ -35,50 +34,32 @@ logger = get_logger(__name__)
 # funds on any network where it is False. Adding a mainnet here without that
 # flag set correctly is how an env flip becomes a real-money transfer.
 _NETWORKS: dict[str, dict] = {
-    "eip155:84532": {
-        "name": "Base Sepolia (testnet)",
-        "chain_id": 84532,
-        "rpc": "https://sepolia.base.org",
-        "token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "token_symbol": "USDC",
-        "token_decimals": 6,
-        "explorer_tx": "https://sepolia.basescan.org/tx/",
-        "native_symbol": "ETH",
-        "testnet": True,
-    },
-    "eip155:8453": {
-        "name": "Base (mainnet)",
-        "chain_id": 8453,
-        "rpc": "https://mainnet.base.org",
-        "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-        "token_symbol": "USDC",
-        "token_decimals": 6,
-        "explorer_tx": "https://basescan.org/tx/",
-        "native_symbol": "ETH",
-        "testnet": False,
-    },
+    # The demo chain. XSGD has no public Fuji deployment, so the default token
+    # is our own stand-in — same symbol, same 6 decimals as the issued asset,
+    # source in infra/contracts/XSGDTest.sol, deployed 2026-08-13. Override
+    # with STABLECOIN_CONTRACT to point at a different one.
     "eip155:43113": {
         "name": "Avalanche Fuji (testnet)",
         "chain_id": 43113,
         "rpc": "",  # filled from settings.avalanche_fuji_rpc_url
-        "token": "0x5425890298aed601595a70AB815c96711a31Bc65",
-        "token_symbol": "USDC",
+        "token": "0x4C41454F440a5869cb881895C26dB9d15Ab65cfA",
+        "token_symbol": "XSGD",
         "token_decimals": 6,
         "explorer_tx": "https://testnet.snowtrace.io/tx/",
         "native_symbol": "AVAX",
         "testnet": True,
     },
-    # Present only so that a StraitsX sandbox running on Avalanche mainnet is a
-    # config flip rather than a code change on the night. Deliberately ships
-    # with NO default token: XSGD's address must be pasted in explicitly, so
-    # nobody can arrive here by accident and read a balance off some other
-    # contract. fund_agent refuses regardless — testnet is False.
+    # Where XSGD actually lives. The address is StraitsX's, VERIFIED on-chain
+    # 2026-08-12 via probe_token: symbol "XSGD", 6 decimals. Balances read
+    # here are the real asset; `_transfer` still refuses outright because
+    # testnet is False, so this is a read-only window by construction and
+    # pointing at it cannot move anything.
     "eip155:43114": {
         "name": "Avalanche C-Chain (mainnet)",
         "chain_id": 43114,
         "rpc": "https://api.avax.network/ext/bc/C/rpc",
-        "token": "",
-        "token_symbol": "",
+        "token": "0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E",
+        "token_symbol": "XSGD",
         "token_decimals": 6,
         "explorer_tx": "https://snowtrace.io/tx/",
         "native_symbol": "AVAX",
@@ -117,6 +98,17 @@ def _decode_abi_string(raw: str) -> str:
 
 class WalletError(RuntimeError):
     pass
+
+
+def is_testnet(network_id: str) -> bool:
+    """Is this CAIP-2 network one we know to be a testnet?
+
+    Fail-closed: a network absent from _NETWORKS reads as NOT a testnet, so an
+    unrecognised id is treated as real money and needs the same explicit
+    opt-in. The alternative — unknown means safe — is how a typo becomes a
+    mainnet signer.
+    """
+    return bool(_NETWORKS.get(network_id, {}).get("testnet", False))
 
 
 def configured_token_decimals() -> int:
@@ -160,8 +152,7 @@ class WalletService:
         if not self._net["token"]:
             raise WalletError(
                 f"no token contract for {settings.x402_network} — set "
-                "STABLECOIN_CONTRACT (and STABLECOIN_SYMBOL / "
-                "STABLECOIN_DECIMALS if it is not 6-decimal USDC)"
+                "STABLECOIN_CONTRACT and STABLECOIN_SYMBOL"
             )
         self._rpc_url = self._net["rpc"]
         # Resolved lazily from the contract on first use — see _token_decimals.
@@ -304,10 +295,6 @@ class WalletService:
             # Resolved from the contract, not echoed from config — this is the
             # number every balance below was divided by.
             "token_decimals": self._token_decimals,
-            # Legacy key. The Commerce page reads `usdc_contract`/`usdc`, and
-            # renaming those mid-week buys nothing — the values are the same
-            # numbers under whichever token is configured.
-            "usdc_contract": self._net["token"],
         }
         for role, addr in (("agent", s.x402_agent_address),
                            ("treasury", s.x402_treasury_address)):
@@ -318,7 +305,6 @@ class WalletService:
                 balance = self._token_balance(addr)
                 out[role] = {
                     "address": addr,
-                    "usdc": balance,   # legacy key, see above
                     "token": balance,
                     "native": self._native_balance(addr),
                 }

@@ -130,7 +130,7 @@ python -m scripts.capture_corpus --verify   # prove it replays with no network
 | LLM          | OpenRouter                                                 |
 | Reddit       | `old.reddit.com` HTML + record/replay corpus              |
 | Obsidian     | Local REST API plugin (localhost:27124)                   |
-| Chain        | Avalanche Fuji (XSGD stand-in) — Base Sepolia as fallback  |
+| Chain        | Avalanche Fuji — XSGD (testnet stand-in)                   |
 | Payments     | x402 (Coinbase SDK) + disposable virtual cards             |
 | Checkout     | Playwright against a Shopify dev store                     |
 

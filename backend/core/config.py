@@ -76,23 +76,25 @@ class Settings(BaseSettings):
     # shorten a session, never extend one. 0 disables caching.
     auth_cache_seconds: int = 300
 
-    # x402 — real protocol on Base Sepolia testnet (free faucet USDC).
-    # Flip network to "eip155:8453" (Base mainnet) + fund the agent wallet
-    # with real USDC for production. Same code either way.
-    x402_network: str = "eip155:84532"
-    x402_facilitator_url: str = "https://x402.org/facilitator"
+    # x402 — real protocol on Avalanche Fuji, the chain this build showcases.
+    # The facilitator MUST match the network: x402.org serves Base Sepolia
+    # only, and Ultravioleta DAO serves Fuji (probed: x402Version 2, scheme
+    # "exact", eip155:43113). Changing one without the other leaves payments
+    # failing at settle time with an error that does not name the cause.
+    x402_network: str = "eip155:43113"
+    x402_facilitator_url: str = "https://facilitator.ultravioletadao.xyz"
     x402_agent_private_key: str = ""
     x402_agent_address: str = ""
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
     # Comma-separated extra networks to register the signer for, beyond
-    # x402_network — e.g. "eip155:43113" for Avalanche Fuji.
-    # See docs/HACKATHON_SWAP.md.
+    # x402_network. See docs/HACKATHON_SWAP.md.
     x402_extra_networks: str = ""
-    # Base mainnet signing is OFF unless this is explicitly flipped. Bazaar
-    # listings are mainnet, so registering the signer there is what makes a
-    # real-money payment possible — that has to be a deliberate act, matching
-    # wallet.fund_agent's refusal to move mainnet funds from an endpoint.
+    # Mainnet signing is OFF unless this is explicitly flipped. Bazaar listings
+    # are third-party services on mainnets, so registering the signer there is
+    # what makes a real-money payment possible — that has to be a deliberate
+    # act, matching wallet._transfer's refusal to move mainnet funds from an
+    # endpoint.
     x402_allow_mainnet: bool = False
 
     # Where agent-initiated purchases/replacements are executed. Points at our
@@ -106,16 +108,12 @@ class Settings(BaseSettings):
     # happen to be the same address in a single-operator demo.
     merchant_settlement_address: str = ""
 
-    # Avalanche Fuji testnet (hackathon rail swap; see docs/HACKATHON_SWAP.md)
+    # Avalanche Fuji RPC — the chain the funding and settlement legs run on.
     avalanche_fuji_rpc_url: str = "https://api.avax-test.network/ext/bc/C/rpc"
 
     # The token the Funding pillar reads and moves. Each network in
-    # services/wallet.py carries a default (USDC everywhere it is known), and
-    # these override it without a code change.
-    #
-    # This exists because the StraitsX hackathon judges funding in XSGD, so the
-    # swap has to be env vars set at 11pm, not an edit to a dict literal. An
-    # empty/zero value means "use the network default".
+    # services/wallet.py carries a default; these override it without a code
+    # change. An empty value means "use the network default".
     #
     # VERIFIED on-chain 2026-08-12 via WalletService.probe_token: XSGD is at
     # 0xb2F85b7AB3c2b6f62DF06dE6aE7D09c010a5096E on Avalanche C-Chain MAINNET,

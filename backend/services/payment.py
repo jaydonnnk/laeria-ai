@@ -1,9 +1,15 @@
 """Agentic payment execution — REAL x402 protocol (official Coinbase SDK).
 
-Network: Base Sepolia testnet by default — real EIP-712 signatures, real
-facilitator verification and on-chain settlement (https://x402.org/facilitator),
-test USDC from https://faucet.circle.com. Production = flip X402_NETWORK to
-Base mainnet and fund the agent wallet; no code change.
+Network: Avalanche Fuji by default — real EIP-712 signatures, real facilitator
+verification and on-chain settlement via Ultravioleta DAO
+(https://facilitator.ultravioletadao.xyz). Production = flip X402_NETWORK to a
+mainnet, point X402_FACILITATOR_URL at one that serves it, and fund the agent
+wallet; no code change.
+
+The facilitator decides which assets it will settle per network — on Fuji it
+lists USDC only, so a wallet funded in XSGD cannot pay an x402 invoice there.
+That constrains this rail alone; the funding and settlement legs are plain
+ERC-20 transfers in services/wallet.py and are unaffected.
 
 Buyer side (the agent): x402ClientSync + EthAccountSigner over the agent
 wallet. pay_402() detects a 402, builds a signed payment payload, retries
@@ -121,28 +127,29 @@ class PaymentService:
             raise RuntimeError("X402_AGENT_PRIVATE_KEY not configured in .env")
         account = Account.from_key(key)
         client = x402ClientSync()
-        # Register the configured network plus any extra networks from config
-        # (e.g. Avalanche Fuji for the hackathon rail swap — one env var, no
-        # code change). Same wallet signs for all; whether a payment succeeds
-        # depends on that network actually being funded.
+        # Register the configured network plus any extras from config. Same
+        # wallet signs for all; whether a payment succeeds depends on that
+        # network actually being funded.
         #
-        # Base mainnet is NOT registered by default. Bazaar listings are
-        # mainnet, so registering it is precisely what turns a bug into a
-        # real-money transfer — and this path has no test coverage. Flip
-        # X402_ALLOW_MAINNET to opt in, the same deliberate act wallet.py
-        # requires before it will move mainnet funds.
+        # NO mainnet is registered without X402_ALLOW_MAINNET — the same
+        # deliberate act wallet._transfer requires before it will move mainnet
+        # funds. The check used to compare against Base's chain id alone,
+        # which meant any OTHER mainnet (Avalanche C-Chain, say) named in
+        # X402_EXTRA_NETWORKS registered a real-money signer without tripping
+        # anything. It now asks whether each network is a known testnet, and
+        # an unrecognised id counts as mainnet rather than as safe.
+        from services.wallet import is_testnet
+
         networks = {self._settings.x402_network}
-        if self._settings.x402_allow_mainnet:
-            networks.add("eip155:8453")
         if self._settings.x402_extra_networks:
             networks.update(
                 n.strip() for n in self._settings.x402_extra_networks.split(",") if n.strip()
             )
-        if "eip155:8453" in networks and not self._settings.x402_allow_mainnet:
+        mainnets = sorted(n for n in networks if not is_testnet(n))
+        if mainnets and not self._settings.x402_allow_mainnet:
             raise RuntimeError(
-                "Base mainnet signing requested via X402_EXTRA_NETWORKS but "
-                "X402_ALLOW_MAINNET is false — refusing to register a "
-                "real-money signer implicitly"
+                f"refusing to register a real-money signer for {mainnets} — "
+                "these are not known testnets and X402_ALLOW_MAINNET is false"
             )
         register_exact_evm_client(
             client, EthAccountSigner(account), networks=sorted(networks)

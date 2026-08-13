@@ -25,7 +25,7 @@ AGENT_KEY = "0x" + "11" * 32
 
 @pytest.fixture(autouse=True)
 def _base_env(monkeypatch):
-    monkeypatch.setenv("X402_NETWORK", "eip155:84532")
+    monkeypatch.setenv("X402_NETWORK", "eip155:43113")
     monkeypatch.setenv("X402_AGENT_PRIVATE_KEY", AGENT_KEY)
     monkeypatch.setenv("X402_TREASURY_ADDRESS", TREASURY)
     monkeypatch.delenv("MERCHANT_SETTLEMENT_ADDRESS", raising=False)
@@ -43,12 +43,12 @@ def _capture_transfer(monkeypatch) -> dict:
         seen.update(key=private_key, to=to_address, amount=amount)
         return {
             "tx_hash": "0xdeadbeef",
-            "explorer_url": "https://sepolia.basescan.org/tx/0xdeadbeef",
+            "explorer_url": "https://testnet.snowtrace.io/tx/0xdeadbeef",
             "amount_usd": round(amount, 2),
             "token_symbol": "XSGD",
             "from": "0x" + "11" * 20,
             "to": to_address,
-            "network": "Base Sepolia (testnet)",
+            "network": "Avalanche Fuji (testnet)",
         }
 
     monkeypatch.setattr(W.WalletService, "_transfer", fake)

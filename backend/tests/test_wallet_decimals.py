@@ -52,7 +52,7 @@ def _stub_rpc(monkeypatch, *, decimals_hex: str | None, balance_hex: str = "0x0"
 
 @pytest.fixture(autouse=True)
 def _clean_settings(monkeypatch):
-    monkeypatch.setenv("X402_NETWORK", "eip155:84532")
+    monkeypatch.setenv("X402_NETWORK", "eip155:43113")
     monkeypatch.setenv("X402_AGENT_ADDRESS", "0x" + "11" * 20)
     monkeypatch.setenv("X402_TREASURY_ADDRESS", "0x" + "22" * 20)
     get_settings.cache_clear()
@@ -61,7 +61,7 @@ def _clean_settings(monkeypatch):
 
 
 def test_the_contract_beats_the_configured_value(monkeypatch):
-    """Config says 6 (the USDC default), the token says 18. 1e18 wins, so a
+    """Config says 6 (the network default), the token says 18. 1e18 wins, so a
     balance of 1 token reads as 1.0 rather than a trillion."""
     monkeypatch.setenv("STABLECOIN_DECIMALS", "6")
     get_settings.cache_clear()
@@ -117,4 +117,4 @@ def test_configured_token_decimals_needs_no_rpc(monkeypatch):
 
     monkeypatch.delenv("STABLECOIN_DECIMALS")
     get_settings.cache_clear()
-    assert W.configured_token_decimals() == 6  # Base Sepolia USDC default
+    assert W.configured_token_decimals() == 6  # Avalanche Fuji default

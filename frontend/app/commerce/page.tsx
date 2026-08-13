@@ -368,17 +368,18 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
   const [funding, setFunding] = useState(false);
   const [fundMsg, setFundMsg] = useState<React.ReactNode>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Whatever the backend is funding in — USDC today, XSGD at the event. Naming
-  // the token in the UI matters on stage: a panel reading "USDC balance" while
-  // the chain holds XSGD is the kind of detail a judge notices.
-  const symbol = balances?.token_symbol || "USDC";
+  // Always the symbol the backend reports. The fallback is only for the frame
+  // before balances load — it names the asset this build showcases rather than
+  // a different one, because a panel reading the wrong ticker while the chain
+  // holds XSGD is the kind of detail a judge notices.
+  const symbol = balances?.token_symbol || "XSGD";
 
   const refresh = useCallback(async () => {
     try {
       const b = await api.walletBalances();
       setBalances(b);
       setErr(null);
-      onFunded((b.agent.token ?? b.agent.usdc ?? 0) > 0);
+      onFunded((b.agent.token ?? 0) > 0);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -435,7 +436,7 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
                 <div className="text-sm text-danger">{party.error}</div>
               ) : party ? (
                 <>
-                  <Stat value={party.token ?? party.usdc ?? 0} label={`${symbol} balance`} />
+                  <Stat value={party.token ?? 0} label={`${symbol} balance`} />
                   <div className="tnum text-xs text-ink-subtle mt-2">
                     {(party.native ?? 0).toFixed(6)} {balances?.native_symbol} gas
                   </div>

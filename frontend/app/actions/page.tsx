@@ -123,7 +123,7 @@ export default function ActionsPage() {
         <p className="mt-3 text-ink-muted max-w-[46rem]">
           The standing rules your agent operates within — a co-signed spending
           mandate — and every payment it has taken or wants to take. Real x402,
-          USDC on Base Sepolia.
+          XSGD on Avalanche.
         </p>
       </div>
 
@@ -375,9 +375,10 @@ function BazaarSection({
     <section className="mb-10">
       <SectionHeader title="Discover x402 services" aside="Coinbase Bazaar index" />
       <p className="text-sm text-ink-muted mb-4 max-w-[46rem]">
-        Real third-party services that accept agent payments. Most run on Base{" "}
-        <em>mainnet</em> — paying them needs real USDC in the agent wallet
-        (mandate caps still apply).
+        Real third-party services that accept agent payments. These are other
+        people&apos;s listings on other people&apos;s chains — most price in
+        USDC on Base <em>mainnet</em>, so paying one needs real funds on that
+        network, not the XSGD this agent runs on. Mandate caps still apply.
       </p>
       <form onSubmit={search} className="flex gap-2 mb-4 max-w-[440px]">
         <Input
