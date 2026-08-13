@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import time
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import httpx
 from tenacity import (
@@ -129,16 +130,52 @@ class StorefrontService:
         A handle is an identifier, so it deserves a lookup rather than a scan.
         The caller that needed this was filtering a *paginated listing* for a
         known handle, which quietly returns "not found" for any product past
-        the page limit — correct on a 13-product dev store, wrong on any real
-        catalogue. Returns None when the store has no such product.
+        the page limit. Returns None when the store has no such product.
+
+        Uses `.js` rather than `.json` for one specific reason: the single-
+        product `.json` endpoint OMITS the `available` flag on variants
+        (returns null), so every product read through it looks sold out. The
+        catalogue `/products.json` includes it and `.js` includes it; only the
+        per-product `.json` does not. `.js` also prices in CENTS, hence the
+        separate parser.
         """
         try:
-            raw = self._get(f"/products/{handle}.json").json()
+            raw = self._get(f"/products/{handle}.js").json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 404:
                 return None
             raise
-        return self._parse_product(raw.get("product") or {})
+        return self._parse_product_js(raw)
+
+    def _parse_product_js(self, item: dict) -> dict | None:
+        """Normalise the `.js` shape onto the same dict `_parse_product`
+        returns, so callers never care which endpoint answered."""
+        variants = item.get("variants") or []
+        if not variants:
+            return None
+        v = variants[0]
+        try:
+            price = float(v.get("price") or 0) / 100.0  # cents
+        except (TypeError, ValueError):
+            price = 0.0
+        images = item.get("images") or []
+        featured = item.get("featured_image") or (images[0] if images else "")
+        handle = item.get("handle") or ""
+        return {
+            "id": str(item.get("id", "")),
+            "handle": handle,
+            "title": item.get("title", ""),
+            "price_usd": price,
+            "url": f"{self._base}/products/{handle}",
+            "image": featured if isinstance(featured, str) else "",
+            "available": bool(v.get("available")),
+            "variant_id": str(v.get("id", "")),
+            "product_type": item.get("type") or "",
+            "vendor": item.get("vendor") or "",
+            "tags": " ".join(item.get("tags", []))
+            if isinstance(item.get("tags"), list)
+            else str(item.get("tags") or ""),
+        }
 
     def _parse_product(self, item: dict) -> dict | None:
         variants = item.get("variants") or []
@@ -190,6 +227,80 @@ class StorefrontService:
             }
             for c in self._client.cookies.jar
         ]
+
+    def browser_search(self, query: str, limit: int = 12) -> dict:
+        """Search the storefront the way a person does — in a real browser,
+        through the shop's own search page — and report what came back.
+
+        This is the Discovery milestone's "scans an e-commerce site" taken
+        literally. `search_products` asks the shop's JSON endpoint what it
+        stocks; this opens the site, submits a search, and reads the results
+        that were actually rendered.
+
+        WHAT IS READ FROM THE PAGE: the set of product handles the search
+        returned, from `/products/...` links in the DOM. Titles and prices are
+        then resolved through each product's own JSON, because results-card
+        markup is theme-specific and misreading a price is worse than not
+        reading one. The page decides WHICH products were found — that is the
+        scan — and the JSON supplies their details reliably.
+
+        Raises on any failure so the caller can fall back to the HTTP layer;
+        a search that silently returns nothing is indistinguishable from a
+        shop that stocks nothing.
+        """
+        from playwright.sync_api import sync_playwright
+
+        url = f"{self._base}/search?q={quote_plus(query)}"
+        _SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        shot_path = _SCREENSHOT_DIR / f"search-{int(time.time() * 1000)}.png"
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(**self._launch_kwargs())
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 900}, user_agent=_BROWSER_UA
+                )
+                context.add_cookies(self._session_cookies())
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                if "/password" in page.url:
+                    raise RuntimeError(
+                        "storefront password gate not cleared — check "
+                        "SHOP_STOREFRONT_PASSWORD"
+                    )
+                page.wait_for_timeout(1500)  # themes render results client-side
+                hrefs = page.eval_on_selector_all(
+                    "a[href*='/products/']", "els => els.map(e => e.getAttribute('href'))"
+                )
+                page.screenshot(path=str(shot_path))
+            finally:
+                browser.close()
+
+        handles: list[str] = []
+        for href in hrefs or []:
+            handle = self._handle_from_href(href)
+            if handle and handle not in handles:
+                handles.append(handle)
+
+        return {
+            "query": query,
+            "url": url,
+            "handles": handles[:limit],
+            "screenshot_path": str(shot_path),
+        }
+
+    @staticmethod
+    def _handle_from_href(href: str | None) -> str:
+        """Pull the product handle out of a storefront link.
+
+        Handles absolute and relative forms, collection-scoped paths
+        (/collections/x/products/y), and trailing query strings or fragments,
+        because a results page mixes all of them.
+        """
+        if not href or "/products/" not in href:
+            return ""
+        tail = href.split("/products/", 1)[1]
+        return tail.split("?")[0].split("#")[0].split("/")[0].strip()
 
     def verify_product(self, handle: str) -> dict:
         """Open the live product page in a real browser, re-read price and

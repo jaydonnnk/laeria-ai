@@ -266,6 +266,13 @@ export const api = {
     request<StoreVerification>(`/store/product/${encodeURIComponent(handle)}/verify`, {
       method: "POST",
     }),
+  // Discovery: free-text instruction in, one located product out. Returns a
+  // proposal only — buying still goes through proposeAction and the mandate.
+  storeShop: (instruction: string) =>
+    request<ShopPick>("/store/shop", {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
 
   // Hackathon Phase 2: disposable virtual cards
   listCards: () => request<Card[]>("/cards/"),
@@ -377,6 +384,36 @@ export interface StoreProduct {
   product_type: string;
   vendor: string;
   tags: string;
+}
+
+// Mirrors backend agents/shopping_agent.py — the Discovery milestone's output.
+// A proposal, never a purchase: `handle` and `variant_id` are what you hand to
+// proposeAction, where the mandate decides whether it may execute.
+export interface ShopRejection {
+  handle: string;
+  title: string;
+  price_usd: number;
+  why: string;
+}
+
+export interface ShopPick {
+  found: boolean;
+  instruction: string;
+  query: string;
+  max_price: number | null;
+  handle: string;
+  title: string;
+  price_usd: number;
+  variant_id: string;
+  url: string;
+  reason: string;
+  rejected: ShopRejection[];
+  candidates_seen: number;
+  /** "browser" = the shop's own search page was read; "catalogue" = it wasn't. */
+  scanned_via: string;
+  scan_note: string;
+  search_url: string;
+  screenshot_path: string;
 }
 
 // Mirrors backend services/storefront.py verify_product.

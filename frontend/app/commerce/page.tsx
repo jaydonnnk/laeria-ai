@@ -16,6 +16,7 @@ import {
   Mandate,
   PayAction,
   StoreProduct,
+  ShopPick,
   StoreVerification,
   WalletBalances,
 } from "../../lib/api";
@@ -30,6 +31,9 @@ export default function CommercePage() {
   const [verifying, setVerifying] = useState<string | null>(null);
   const [verifications, setVerifications] = useState<Record<string, StoreVerification>>({});
   const [buying, setBuying] = useState<string | null>(null);
+  const [instruction, setInstruction] = useState("");
+  const [shopping, setShopping] = useState(false);
+  const [pick, setPick] = useState<ShopPick | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [handedPick, setHandedPick] = useState<string | null>(null);
@@ -43,7 +47,8 @@ export default function CommercePage() {
   const steps: Step[] = useMemo(() => {
     const done = {
       fund: agentFunded,
-      discover: !!products?.length || Object.keys(verifications).length > 0,
+      discover:
+        !!pick?.found || !!products?.length || Object.keys(verifications).length > 0,
       issue: cardCount > 0,
       execute: executedCount > 0,
     };
@@ -57,7 +62,7 @@ export default function CommercePage() {
       { key: "issue", label: "Issue", caption: "Disposable card", state: state("issue") },
       { key: "execute", label: "Execute", caption: "Checkout + settle", state: state("execute") },
     ];
-  }, [agentFunded, products, verifications, cardCount, executedCount]);
+  }, [agentFunded, pick, products, verifications, cardCount, executedCount]);
 
   const runSearch = useCallback(async (term: string): Promise<StoreProduct[]> => {
     setSearching(true);
@@ -111,6 +116,35 @@ export default function CommercePage() {
     // buy/runSearch are stable enough for this one-shot handoff
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runSearch]);
+
+  async function runShop(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!instruction.trim()) return;
+    setShopping(true);
+    setError(null);
+    setInfo(null);
+    setPick(null);
+    try {
+      setPick(await api.storeShop(instruction.trim()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setShopping(false);
+    }
+  }
+
+  /** Buy what the agent chose. The mandate still gates it — an agent's pick is
+      a proposal, not an authorisation. */
+  async function buyPick(p: ShopPick) {
+    await buy(
+      {
+        id: p.handle, handle: p.handle, title: p.title, price_usd: p.price_usd,
+        url: p.url, image: "", available: true, variant_id: p.variant_id,
+        product_type: "", vendor: "", tags: "",
+      },
+      null
+    );
+  }
 
   async function verify(p: StoreProduct) {
     setVerifying(p.handle);
@@ -193,16 +227,42 @@ export default function CommercePage() {
             {autoNote && <span className="block mt-1">{autoNote}</span>}
           </Banner>
         )}
-        <form onSubmit={search} className="flex gap-2 mb-5 max-w-[440px]">
+        {/* The agent path. A plain search box is kept below it as the manual
+            fallback — useful when the model is slow and essential when it is
+            unavailable, but it is not the milestone. */}
+        <form onSubmit={runShop} className="flex gap-2 mb-3 max-w-[620px]">
           <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder='Search the store, e.g. "snowboard"'
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder='Tell the agent what to buy, e.g. "get me ski wax, under $30"'
           />
-          <Button type="submit" disabled={searching} className="shrink-0">
-            {searching ? "Searching…" : "Search"}
+          <Button type="submit" disabled={shopping} className="shrink-0">
+            {shopping ? "Scanning…" : "Send to agent"}
           </Button>
         </form>
+        {shopping && (
+          <p className="text-sm text-ink-subtle mb-5">
+            Reading the instruction, searching the storefront in a browser, then
+            choosing — about 40 seconds.
+          </p>
+        )}
+        {pick && !shopping && <ShopResult pick={pick} onBuy={buyPick} buying={buying !== null} />}
+
+        <details className="mb-5">
+          <summary className="text-sm text-ink-subtle cursor-pointer">
+            Search the catalogue manually
+          </summary>
+          <form onSubmit={search} className="flex gap-2 mt-3 max-w-[440px]">
+            <Input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder='Search the store, e.g. "snowboard"'
+            />
+            <Button type="submit" disabled={searching} className="shrink-0">
+              {searching ? "Searching…" : "Search"}
+            </Button>
+          </form>
+        </details>
 
         {products && products.length === 0 && (
           <p className="text-ink-subtle text-sm">No products matched.</p>
@@ -234,6 +294,83 @@ export default function CommercePage() {
 }
 
 /* ------------------------------------------------------------------ */
+
+/** What the agent decided, and what it decided from.
+ *
+ *  The reason and the rejected list are the point. A pick with no visible
+ *  reasoning is indistinguishable from the keyword filter this replaced, and
+ *  the whole claim of the Discovery milestone is that something judged. */
+function ShopResult({
+  pick,
+  onBuy,
+  buying,
+}: {
+  pick: ShopPick;
+  onBuy: (p: ShopPick) => void;
+  buying: boolean;
+}) {
+  return (
+    <Card className="p-5 mb-5">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <Badge tone={pick.found ? "accent" : "neutral"} dot>
+          {pick.found ? "located" : "no pick"}
+        </Badge>
+        <span className="text-xs text-ink-subtle font-mono">
+          searched “{pick.query}”
+          {pick.max_price != null && ` · budget ${pick.max_price.toFixed(2)}`}
+          {` · ${pick.candidates_seen} candidates`}
+        </span>
+        {/* A catalogue fallback is an honest outcome but a different claim
+            from "scanned the site", so it is labelled rather than hidden. */}
+        <Badge tone={pick.scanned_via === "browser" ? "neutral" : "warning"}>
+          {pick.scanned_via === "browser"
+            ? "scanned in browser"
+            : "catalogue fallback"}
+        </Badge>
+      </div>
+
+      {pick.found ? (
+        <>
+          <div className="flex items-baseline justify-between gap-4 mb-1">
+            <h3 className="font-semibold">{pick.title}</h3>
+            <span className="tnum font-semibold shrink-0">
+              {pick.price_usd.toFixed(2)}
+            </span>
+          </div>
+          <p className="text-sm text-ink-muted mb-4">{pick.reason}</p>
+          <Button onClick={() => onBuy(pick)} disabled={buying}>
+            {buying ? "Proposing…" : "Buy this"}
+          </Button>
+        </>
+      ) : (
+        <p className="text-sm text-ink-muted">{pick.reason}</p>
+      )}
+
+      {pick.scan_note && (
+        <p className="text-xs text-ink-subtle mt-3">{pick.scan_note}</p>
+      )}
+
+      {pick.rejected.length > 0 && (
+        <details className="mt-4">
+          <summary className="text-sm text-ink-subtle cursor-pointer">
+            Considered and rejected ({pick.rejected.length})
+          </summary>
+          <ul className="mt-2 grid gap-1">
+            {pick.rejected.map((r) => (
+              <li key={r.handle} className="text-[13px] text-ink-muted">
+                <span className="text-ink">{r.title}</span>{" "}
+                <span className="tnum text-ink-subtle">
+                  {r.price_usd.toFixed(2)}
+                </span>{" "}
+                — {r.why}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Card>
+  );
+}
 
 function ProductRow({
   product: p,

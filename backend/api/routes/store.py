@@ -11,10 +11,15 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from services.storefront import StorefrontService
 
 router = APIRouter(prefix="/store", tags=["store"])
+
+
+class ShopRequest(BaseModel):
+    instruction: str = Field(min_length=3, max_length=400)
 
 _SCREENSHOTS_ROOT = Path(__file__).resolve().parent.parent.parent / "screenshots"
 
@@ -25,6 +30,43 @@ def search(q: str = "", limit: int = 12) -> list[dict]:
         return StorefrontService().search_products(query=q, limit=min(limit, 50))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"store search failed: {exc}")
+
+
+@router.post("/shop")
+def shop(req: ShopRequest) -> dict:
+    """Discovery: a free-text purchase instruction in, one located product out.
+
+    Returns a PROPOSAL — handle, variant, price, and the agent's reasoning.
+    Nothing is bought here. The caller feeds the handle and variant to
+    /actions/propose, where the mandate decides whether it may execute. That
+    split is deliberate: the model chooses what, the mandate decides whether,
+    so no instruction can talk its way into a purchase.
+    """
+    from agents.shopping_agent import ShoppingAgent
+
+    try:
+        pick = ShoppingAgent().shop(req.instruction)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"shopping agent failed: {exc}")
+
+    return {
+        "found": pick.found,
+        "instruction": pick.instruction,
+        "query": pick.query,
+        "max_price": pick.max_price,
+        "handle": pick.handle,
+        "title": pick.title,
+        "price_usd": pick.price,
+        "variant_id": pick.variant_id,
+        "url": pick.url,
+        "reason": pick.reason,
+        "rejected": pick.rejected,
+        "candidates_seen": pick.candidates_seen,
+        "scanned_via": pick.scanned_via,
+        "scan_note": pick.scan_note,
+        "search_url": pick.search_url,
+        "screenshot_path": pick.screenshot_path,
+    }
 
 
 @router.get("/screenshot/{category}/{filename}")
