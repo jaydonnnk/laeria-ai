@@ -448,9 +448,16 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
         })}
       </div>
       <form onSubmit={fund} className="flex items-end gap-3">
-        <Field label="Amount (USD)">
-          <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden w-[140px]">
-            <span className="px-3 text-ink-subtle text-sm border-r border-hairline">$</span>
+        {/* Denominated in the token, not in dollars. The amount is a token
+            quantity — labelling it USD and prefixing "$" was harmless while
+            the token was USDC and is simply wrong on an SGD-pegged one, on
+            the exact screen where a judge is checking that we know what asset
+            we are moving. */}
+        <Field label={`Amount (${symbol})`}>
+          <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden w-[190px]">
+            <span className="px-3 text-ink-subtle text-xs border-r border-hairline whitespace-nowrap">
+              {symbol}
+            </span>
             <input
               type="number" step="0.01" min="0.01"
               value={amount}
