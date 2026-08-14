@@ -84,6 +84,57 @@ export function toUnits(amount: string | number, decimals: number): bigint {
   return BigInt((whole || "0") + fracPadded);
 }
 
+// EIP-712 delegation. This MUST mirror services/delegation.py exactly — same
+// domain, same field order, same types — or the address the backend recovers
+// won't be the signer.
+export interface MandateMessage {
+  maxPerTransaction: string; // uint256 base units, as a decimal string
+  maxPerMonth: string;
+  requireConfirmationAbove: string;
+  autonomous: boolean;
+  expiry: number; // unix seconds
+  nonce: number;
+}
+
+export function buildMandateTypedData(chainId: number, message: MandateMessage) {
+  return {
+    domain: { name: "laeria.ai", version: "1", chainId },
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+      ],
+      SpendingMandate: [
+        { name: "maxPerTransaction", type: "uint256" },
+        { name: "maxPerMonth", type: "uint256" },
+        { name: "requireConfirmationAbove", type: "uint256" },
+        { name: "autonomous", type: "bool" },
+        { name: "expiry", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+      ],
+    },
+    primaryType: "SpendingMandate",
+    message,
+  };
+}
+
+/** Sign the mandate delegation with the connected wallet. Returns the sig. */
+export async function signMandateDelegation(
+  from: string,
+  chainId: number,
+  message: MandateMessage
+): Promise<string> {
+  const eth = getEthereum();
+  if (!eth) throw new Error("No wallet found.");
+  const typedData = buildMandateTypedData(chainId, message);
+  const sig = (await eth.request({
+    method: "eth_signTypedData_v4",
+    params: [from, JSON.stringify(typedData)],
+  })) as string;
+  return sig;
+}
+
 /** Send an ERC-20 approve(operator, amount). Returns the tx hash. */
 export async function approveSpending(params: {
   from: string;

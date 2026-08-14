@@ -487,6 +487,85 @@ def put_mandate(req: MandateUpdate) -> dict:
     return repo.set_mandate(req.model_dump())
 
 
+class DelegationRequest(BaseModel):
+    # The EIP-712 message the wallet signed (the six SpendingMandate fields),
+    # the chain it was signed for, and the signature.
+    message: dict
+    chain_id: int = Field(ge=1)
+    signature: str = Field(min_length=4)
+
+
+@router.post("/mandate/delegation")
+def sign_delegation(req: DelegationRequest) -> dict:
+    """Record the user's signed delegation over their mandate. Verified against
+    the connected wallet and the current caps before it is stored — an
+    unverifiable signature is rejected, never persisted."""
+    from db import repositories as repo
+    from services.delegation import DelegationError, verify_delegation
+
+    wallet = repo.get_user_wallet()
+    if not wallet or not wallet.get("address"):
+        raise HTTPException(
+            status_code=409, detail="connect a wallet before signing a delegation"
+        )
+    mandate = repo.get_mandate() or {}
+    try:
+        record = verify_delegation(
+            message=req.message,
+            chain_id=req.chain_id,
+            signature=req.signature,
+            expected_signer=wallet["address"],
+            mandate=mandate,
+        )
+    except DelegationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    repo.set_delegation(record)
+    return {
+        "verified": True,
+        "signed_by": record["signed_by"],
+        "expiry": record["message"]["expiry"],
+    }
+
+
+@router.get("/mandate/delegation")
+def read_delegation() -> dict:
+    """The stored delegation, re-verified live against the current wallet and
+    mandate so a since-changed cap shows as no-longer-valid rather than a stale
+    green tick."""
+    from time import time
+
+    from db import repositories as repo
+    from services.delegation import DelegationError, verify_delegation
+
+    record = repo.get_delegation()
+    if not record:
+        return {"present": False}
+
+    wallet = repo.get_user_wallet() or {}
+    mandate = repo.get_mandate() or {}
+    expiry = (record.get("message") or {}).get("expiry")
+    out: dict = {
+        "present": True,
+        "signed_by": record.get("signed_by"),
+        "expiry": expiry,
+        "signed_at": record.get("signed_at"),
+        "expired": bool(expiry and int(expiry) <= int(time())),
+    }
+    try:
+        verify_delegation(
+            message=record["message"],
+            chain_id=record["chain_id"],
+            signature=record["signature"],
+            expected_signer=(wallet.get("address") or record.get("signed_by") or ""),
+            mandate=mandate,
+        )
+        out["verified"] = True
+    except DelegationError as exc:
+        out["verified"] = False
+        out["reason"] = str(exc)
+    return out
+
+
 @router.post("/propose")
 def propose_action(req: ProposeRequest) -> dict:
     """Agent (or user) proposes a payable action. Executes autonomously only

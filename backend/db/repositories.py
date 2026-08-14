@@ -256,6 +256,32 @@ def get_user_wallet() -> dict | None:
     }
 
 
+def get_delegation() -> dict | None:
+    """The current user's signed mandate delegation, or None if unsigned."""
+    res = (
+        get_supabase()
+        .table("profiles")
+        .select("delegation")
+        .eq("id", _owner())
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    return res.data[0].get("delegation")
+
+
+def set_delegation(delegation: dict | None) -> dict | None:
+    """Persist (or clear) the signed delegation for the current user."""
+    res = (
+        get_supabase()
+        .table("profiles")
+        .upsert({"id": _owner(), "delegation": delegation})
+        .execute()
+    )
+    return res.data[0].get("delegation")
+
+
 def set_user_wallet(address: str, key_encrypted: str) -> dict:
     """Persist a freshly generated wallet for the current user. Upsert so it
     creates the profile row if the account never set a mandate first."""

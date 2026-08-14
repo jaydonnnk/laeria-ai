@@ -8,6 +8,7 @@ import { Badge } from "../../components/ui/Badge";
 import { Stat } from "../../components/ui/Stat";
 import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
+import { DelegationPanel } from "../../components/actions/DelegationPanel";
 import { shake } from "../../lib/motion";
 
 const STATUS_TONE: Record<string, "success" | "info" | "warning" | "neutral" | "danger"> = {
@@ -180,6 +181,7 @@ export default function ActionsPage() {
                 </Button>
               </form>
             </Card>
+            <DelegationPanel />
           </section>
 
           {/* Pending approvals */}

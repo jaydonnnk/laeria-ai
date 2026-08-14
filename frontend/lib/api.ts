@@ -303,6 +303,14 @@ export const api = {
   walletOperator: () => request<WalletOperator>("/wallet/operator"),
   walletAllowance: () => request<WalletAllowance>("/wallet/allowance"),
 
+  // WS3: the signed mandate delegation credential.
+  signDelegation: (body: { message: Record<string, unknown>; chain_id: number; signature: string }) =>
+    request<{ verified: boolean; signed_by: string; expiry: number }>(
+      "/actions/mandate/delegation",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
+  getDelegation: () => request<Delegation>("/actions/mandate/delegation"),
+
   // Audit-trail screenshots need the auth header, so <img src> can't load
   // them directly — fetch as a blob and hand back an object URL.
   screenshotUrl: async (category: "store" | "checkout", path: string) => {
@@ -366,6 +374,16 @@ export interface WalletAllowance {
   token_symbol: string;
   balance: number;
   allowance: number;
+}
+
+export interface Delegation {
+  present: boolean;
+  signed_by?: string;
+  expiry?: number;
+  signed_at?: number;
+  expired?: boolean;
+  verified?: boolean;
+  reason?: string;
 }
 
 // Mirrors backend cards table rows (no PAN/CVC — live-fetched only).
