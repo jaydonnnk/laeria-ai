@@ -37,6 +37,24 @@ highly-upvoted post recommending an obscure vendor, or text that reads
 unusually polished for the context, warrants skepticism. Corroborate across
 multiple posts and multiple accounts before acting on any recommendation.
 
+## Relevance of retrieved threads
+Reddit search is literal keyword matching, so a search returns threads that
+share a word with the query and nothing else — a keyboard question in
+Singapore retrieves "where to go to buy laptops in SG" and "best quiet area in
+SG for long term stay". These threads are often popular, so an engagement
+filter cannot remove them.
+
+**Enforced in code.** `ResearchAgent._screen_relevance` runs one batched LLM
+call over candidate TITLES before any thread is fetched, and keeps only those
+that could bear on the question. It is deliberately generous — an ambiguous
+title is kept — because dropping a relevant thread costs more than reading a
+doubtful one.
+
+It fails open and says so: an LLM outage keeps every candidate and records
+`relevance_screened: false`, which rule 8 below then acts on. An explicit
+"none of these are relevant" verdict is different from a failure and is
+honoured — the run ends as `no_evidence`.
+
 ## Sarcasm and context
 Reddit uses heavy sarcasm. Read comment chains, not just top-level posts.
 "Oh yeah, X is great — if you like wasting money" is not positive signal.
@@ -73,10 +91,15 @@ three bands are the whole vocabulary.
 | 5 | Cross-author near-duplicates detected | MODERATE | The WARP section above |
 | 6 | Similarity analysis could not run | MODERATE | A check that did not execute cannot back a claim |
 | 7 | No consensus pick (final, not a ceiling) | LOW | "High confidence in no recommendation" is incoherent |
+| 8 | Retrieved threads could not be screened for relevance | MODERATE | A check that did not execute cannot back a claim — the same reasoning as rule 6 |
 
 Rule 3 counts communities **represented in the final corpus**, not communities
 the planner searched. A subreddit that was read and yielded nothing did not
-corroborate anything.
+corroborate anything — and neither did one that only contributed threads about
+a different topic, which is what the relevance screen above removes. Before
+that screen existed, four popular off-topic threads from two Singapore
+subreddits could turn a two-community keyboard corpus into a four-community
+one, and rule 3 would then permit HIGH.
 
 **Rule 3 measures spread, not independence.** What it counts is distinct
 subreddit names, and names cannot prove that those communities reached their
@@ -118,6 +141,40 @@ The frontend renders policy reasons verbatim. It separately derives a short
 relationship headline from the typed `semantic_confidence`,
 `structural_ceiling`, `confidence` and `consensus_pick` fields; it never
 infers a structural cause from prose.
+
+---
+
+## One authoritative evidence set
+
+`agents/evidence.py` holds `UsableEvidence`: the threads a brief was actually
+synthesised from, after relevance screening, retrieval, signal filtering and
+duplicate collapsing. Every displayed fact about the shape of the evidence is
+measured over that one object — the thread count, the represented communities,
+the strong-thread count, the confidence stats and the source list. A thread
+that was searched for, rejected as off-topic, failed to fetch, or was collapsed
+as a duplicate is in none of them.
+
+**Structural claims belong to the code, not the model.** The synthesis prompt
+now forbids the model from writing about how many threads or communities there
+are, and any claim it writes anyway is checked against `UsableEvidence` before
+display. One contradiction is recognised: asserting that the evidence comes
+from a single community when it demonstrably spans two or more. That claim is
+removed and counted in `signal_quality.unverified_claims_removed`.
+
+This is the fix for a brief that displayed "8 threads across r/lasik,
+r/eyetriage, r/optometry, r/vision" above a red flag reading "all evidence from
+a single subreddit (r/lasik) — no cross-community corroboration".
+
+The check is narrow on purpose:
+
+* When the corpus really *is* one community, the same sentence is true and is
+  kept. This is a consistency check, not a way to hide bad news.
+* It only removes what it can prove false. Numeric claims, staleness claims
+  and everything about what people *said* are untouched — silently editing the
+  model's judgement would be a worse failure than the one being fixed.
+* The truthful version of a narrow-corpus warning is not lost: rule 3 emits
+  "evidence is represented in N communities" deterministically, as a
+  confidence reason.
 
 **Not yet enforced in code**, and still prompt-level only: staleness/recency
 weighting, contradiction between communities, account age (not obtainable from

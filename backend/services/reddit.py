@@ -65,6 +65,12 @@ class SignalFilterResult:
     # How many of the unique threads cleared score >= min_score AND
     # num_comments >= min_comments, whether or not relaxation then fired.
     strong_thread_count: int = 0
+    # WHICH threads those were. Carried as ids so a later stage can count the
+    # strong threads that survived IT — duplicate collapsing can remove one —
+    # without restating the thresholds, which live here and only here. Without
+    # this, "only N threads cleared the bar" could quote a number larger than
+    # the thread count displayed beside it.
+    strong_thread_ids: frozenset[str] = frozenset()
     # True when `strong_thread_count` fell below STRONG_THREAD_TARGET and the
     # broader selection branch was used instead of strong-only filtering.
     #
@@ -488,6 +494,7 @@ class RedditService:
         return SignalFilterResult(
             threads=sorted(result, key=lambda t: (t.score, t.num_comments), reverse=True),
             strong_thread_count=len(strong),
+            strong_thread_ids=frozenset(t.id for t in strong),
             relaxed=relaxed,
         )
 

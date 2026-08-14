@@ -43,6 +43,7 @@ def strong_evidence(**overrides) -> EvidenceStats:
         filters_relaxed=False,
         cross_author_duplicate_count=0,
         similarity_analysis_available=True,
+        relevance_screened=True,
         has_consensus_pick=True,
     )
     base.update(overrides)
@@ -147,6 +148,33 @@ def test_case10b_unavailable_similarity_analysis_does_not_force_low():
     assert outcome.final is MODERATE, "an infrastructure failure must not read as bad evidence"
 
 
+def test_an_unscreened_corpus_caps_at_moderate():
+    """RULE 8: nobody checked these threads were even about the question.
+
+    Reddit search is keyword matching, so an unscreened corpus can contain
+    threads that share a word with the query and nothing else. Every count in
+    the policy is then measuring an unknown mixture.
+    """
+    outcome = assess(HIGH, strong_evidence(relevance_screened=False))
+    assert outcome.final is MODERATE
+    assert any("relevance" in r.lower() for r in outcome.reasons)
+
+
+def test_an_unscreened_corpus_does_not_force_low():
+    """Same shape as the similarity rule: a check outage is not bad evidence."""
+    outcome = assess(HIGH, strong_evidence(relevance_screened=False))
+    assert outcome.final is MODERATE
+    outcome_moderate = assess(MODERATE, strong_evidence(relevance_screened=False))
+    assert outcome_moderate.final is MODERATE
+
+
+def test_a_screened_corpus_is_not_penalised():
+    """The rule must fire on the outage only, never on the normal path."""
+    ceiling, reasons = structural_ceiling(strong_evidence(relevance_screened=True))
+    assert ceiling is HIGH
+    assert not any("relevance" in r.lower() for r in reasons)
+
+
 def test_case11_an_empty_consensus_pick_forces_low():
     outcome = assess(HIGH, strong_evidence(has_consensus_pick=False))
     assert outcome.final is LOW
@@ -218,6 +246,7 @@ def test_weakest_legal_evidence_cannot_reach_high():
         {"filters_relaxed": True},
         {"cross_author_duplicate_count": 1},
         {"similarity_analysis_available": False},
+        {"relevance_screened": False},
         {"has_consensus_pick": False},
     ]
     for degradation in degradations:
@@ -237,10 +266,11 @@ def test_structure_can_never_raise_any_semantic_verdict():
         (False, True),         # filters relaxed
         (0, 3),                # cross-author duplicates
         (False, True),         # similarity available
+        (False, True),         # relevance screened
         (False, True),         # has pick
     )
     rank = {LOW: 0, MODERATE: 1, HIGH: 2}
-    for threads, subs, relaxed, dupes, sim, pick in space:
+    for threads, subs, relaxed, dupes, sim, screened, pick in space:
         stats = EvidenceStats(
             usable_thread_count=threads,
             strong_thread_count=threads,
@@ -248,6 +278,7 @@ def test_structure_can_never_raise_any_semantic_verdict():
             filters_relaxed=relaxed,
             cross_author_duplicate_count=dupes,
             similarity_analysis_available=sim,
+            relevance_screened=screened,
             has_consensus_pick=pick,
         )
         for semantic in ALL_LEVELS:
@@ -267,8 +298,10 @@ def test_high_requires_every_condition_simultaneously():
         (0, 1),
         (False, True),
         (False, True),
+        (False, True),
     )
-    for threads, subs, relaxed, dupes, sim, pick in space:
+    reached_high = 0
+    for threads, subs, relaxed, dupes, sim, screened, pick in space:
         stats = EvidenceStats(
             usable_thread_count=threads,
             strong_thread_count=threads,
@@ -276,19 +309,25 @@ def test_high_requires_every_condition_simultaneously():
             filters_relaxed=relaxed,
             cross_author_duplicate_count=dupes,
             similarity_analysis_available=sim,
+            relevance_screened=screened,
             has_consensus_pick=pick,
         )
         for semantic in ALL_LEVELS:
             if assess(semantic, stats).final is not HIGH:
                 continue
+            reached_high += 1
             assert semantic is HIGH
             assert threads > 1
             assert len(subs) >= MIN_SUBREDDITS_FOR_HIGH
             assert not relaxed
             assert dupes == 0
             assert sim
+            assert screened
             assert pick
             assert rank[semantic] == 2
+    # Guards the test itself: adding a rule whose default forbids HIGH would
+    # otherwise leave this loop asserting nothing and still passing.
+    assert reached_high > 0, "no shape in the space reached HIGH — this test proved nothing"
 
 
 def test_a_cautious_model_is_explained_without_blaming_the_evidence():

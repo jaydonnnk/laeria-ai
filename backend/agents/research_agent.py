@@ -5,13 +5,16 @@ The two share retrieval infrastructure but differ in search strategy and
 synthesis prompt.
 
 Mode 2 pipeline (Phase 1):
-    identify subreddits (LLM) -> search each (HTML) -> pick best candidates
-    -> fetch full threads + comments -> signal filter -> synthesise (LLM JSON)
+    identify subreddits (LLM) -> search each (HTML) -> screen for relevance
+    (LLM) -> pick best candidates -> fetch full threads + comments -> signal
+    filter -> synthesise (LLM JSON)
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 from core.logging import get_logger
 from core.models import (
@@ -52,6 +55,11 @@ _MAX_SUBREDDITS = 4
 # stops each request's latency being stacked on top of every other request's
 # pacing gap. Modest on purpose: beyond the gap there is nothing to win.
 _FETCH_CONCURRENCY = 4
+# How many search hits the relevance screen judges in one call. Ranked by
+# engagement first, so the cut drops the weakest candidates rather than
+# whichever subreddit was searched last — and the thread budget is 8, so the
+# tail was never going to be read anyway.
+_RELEVANCE_BATCH = 60
 
 _IDENTIFY_SYSTEM = """You identify which subreddits hold the best first-hand \
 human discussion for a research query. Respond with JSON only:
@@ -82,10 +90,15 @@ excerpts provided by the user. Respond with JSON only, exactly this schema:
   "alternatives": ["other options repeatedly mentioned, each with a phrase of context"],
   "red_flags": ["warning signs: astroturfing suspicion, vendor problems, degrading quality"],
   "confidence": "high" | "moderate" | "low",
-  "bias_notes": "one or two sentences on sample bias, shilling suspicion, or thin coverage"
+  "bias_notes": "one or two sentences on WHO is talking and how that skews the picture — self-selection, enthusiast skew, shilling suspicion"
 }
 
 Rules — these are integrity constraints, not suggestions:
+- Do NOT make claims about the SHAPE of the evidence: how many threads there
+  are, how many communities they span, or whether cross-community
+  corroboration exists. Those are counted from the corpus and shown to the
+  user separately, so a guess here can only contradict them. Write about what
+  people SAID.
 - Only claim what the provided threads actually support. Never invent products,
   prices, or opinions not present in the excerpts.
 - Report positive and negative signal at the SAME evidentiary standard. Reddit
@@ -154,11 +167,17 @@ exactly this schema:
   "what_reviewers_miss": ["things these real users mention that review sites don't"],
   "red_flags": ["warning signs: astroturfing suspicion, vendor problems, degrading quality"],
   "confidence": "high" | "moderate" | "low",
-  "bias_notes": "one or two sentences on sample bias, shilling suspicion, or thin coverage"
+  "bias_notes": "one or two sentences on WHO is talking and how that skews the picture — self-selection, enthusiast skew, shilling suspicion"
 }
 """
     + _SHARED_RULES
     + """
+- Do NOT make claims about the SHAPE of the evidence: how many threads there
+  are, how many communities they span, or whether cross-community
+  corroboration exists. Those are counted from the corpus and shown to the
+  user separately, so a guess here can only contradict them — and a claim that
+  contradicts the count is removed before anyone sees it. Write about what
+  people SAID; the confidence field is where thin coverage belongs.
 - Be suspicious of coordinated praise: same product named with unusual polish
   across unrelated threads, or praised only in low-score comments -> mention in
   red_flags and lower confidence.
@@ -167,6 +186,27 @@ exactly this schema:
   doubt, choose lower. If the threads simply don't answer the query, set
   confidence "low"."""
 )
+
+
+_RELEVANCE_SYSTEM = """You screen Reddit search results for relevance to a \
+research question. Reddit search is literal keyword matching, so the results \
+routinely contain threads about a completely different topic that merely share \
+a word with the query.
+
+Respond with JSON only: {"relevant_ids": ["id1", "id2", ...]}
+
+Include a post id when the title suggests the thread COULD carry discussion
+bearing on the question — the same product, the same category, the same
+decision, or the experience of people who made it.
+
+EXCLUDE only posts clearly about something else. For "best mechanical keyboard
+under $100 in Singapore", exclude "where to buy laptops in SG" and "best quiet
+area in SG for long term stay"; keep "cheap keyboard recommendations" and
+"which switches for a budget board".
+
+Be conservative: when a title is vague or ambiguous, INCLUDE it. Dropping a
+relevant thread costs more than keeping a doubtful one. Return every id you
+keep, even if that is all of them."""
 
 
 _CLASSIFY_SYSTEM = """You classify Reddit post titles. The user is researching \
@@ -220,6 +260,21 @@ class NoRecordedPlan(RuntimeError):
     the API as a 500, which is the wrong thing to show someone who simply
     asked something we did not record.
     """
+
+
+@dataclass(frozen=True)
+class RelevanceScreen:
+    """What the relevance screen decided about one candidate set.
+
+    `screened` is the honest record of whether the check actually ran. False
+    means the candidates are unfiltered, NOT that they were all found
+    relevant — the confidence policy depends on being able to tell those
+    apart, in the same way it already does for similarity analysis.
+    """
+
+    threads: list[RedditThread]
+    screened: bool = False
+    rejected: int = 0
 
 
 class ResearchAgent:
@@ -332,11 +387,37 @@ class ResearchAgent:
                 EvidenceState.NO_EVIDENCE if live_ok else EvidenceState.SOURCE_UNAVAILABLE,
             )
 
-        # 3. Choose which threads to actually read: engagement-ranked,
-        #    spread across subreddits so one sub doesn't dominate.
-        chosen = _spread_pick(candidates, thread_budget)
+        # 3. Screen for relevance BEFORE anything is read.
+        #
+        # Reddit search is literal keyword matching, so a search for a cheap
+        # keyboard in Singapore returns "where to buy laptops in SG" and "best
+        # quiet area in SG for long term stay" alongside the real hits. Those
+        # threads used to be fetched, filtered on engagement alone (which they
+        # pass easily — they are popular threads, just about something else),
+        # and then counted as usable evidence: they inflated the thread count,
+        # added their subreddits to the represented communities, and so raised
+        # the confidence the evidence shape was allowed to earn.
+        #
+        # Screening here rather than after fetching is deliberate: an off-topic
+        # thread that is never read cannot reach any downstream count, and the
+        # fetches it would have consumed go to real candidates instead.
+        screen = self._screen_relevance(query, candidates)
+        if not screen.threads:
+            # The screen ran and rejected everything. Search worked, so this is
+            # NO_EVIDENCE — nothing relevant exists for this question — not a
+            # retrieval or filtering failure.
+            return _empty_brief(
+                subreddits,
+                "Threads were found, but none of them were about this "
+                "question, so there was nothing relevant to read.",
+                EvidenceState.NO_EVIDENCE,
+            )
 
-        # 4. Fetch full threads (expensive part), then signal-filter.
+        # 4. Choose which threads to actually read: engagement-ranked,
+        #    spread across subreddits so one sub doesn't dominate.
+        chosen = _spread_pick(screen.threads, thread_budget)
+
+        # 5. Fetch full threads (expensive part), then signal-filter.
         #    Results are collected in `chosen` order rather than completion
         #    order, so the corpus handed to the LLM stays engagement-ranked.
         full_threads = self._fetch_threads(chosen)
@@ -355,8 +436,8 @@ class ResearchAgent:
                 EvidenceState.NO_USABLE_EVIDENCE,
             )
 
-        # 5. Synthesise (LLM), then apply the deterministic confidence ceiling.
-        brief = self._synthesise(query, filter_result, subreddits)
+        # 6. Synthesise (LLM), then apply the deterministic confidence ceiling.
+        brief = self._synthesise(query, filter_result, subreddits, screen)
         if use_cache:
             research_cache.put(
                 query,
@@ -366,6 +447,60 @@ class ResearchAgent:
         return brief
 
     # ---- internals ----
+
+    def _screen_relevance(
+        self, query: str, candidates: list[RedditThread]
+    ) -> RelevanceScreen:
+        """Drop search hits that are clearly about something else.
+
+        One batched LLM call over titles — the same shape as Mode 1's
+        retrospective classifier, and cheap next to the thread fetches it
+        saves.
+
+        FAILS OPEN, and says so. If the call fails, or the model answers with
+        something unusable, every candidate is kept and `screened` is False:
+        an LLM outage must not empty a corpus. That honesty has teeth
+        downstream — `agents.confidence` RULE 8 caps an unscreened corpus at
+        MODERATE, because a relevance check that did not run cannot be claimed
+        as passed.
+
+        An explicit empty verdict is different from a failure and is
+        respected: the model read the titles and found nothing on-topic, which
+        is a real answer to a real question.
+        """
+        batch = sorted(candidates, key=_engagement_key, reverse=True)[:_RELEVANCE_BATCH]
+        lines = "\n".join(f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in batch)
+        try:
+            raw = self._llm.complete_json(
+                _RELEVANCE_SYSTEM,
+                f"Research question: {query}\n\nSearch results:\n{lines}",
+                max_tokens=1500,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("relevance screen unavailable: %s", exc)
+            return RelevanceScreen(candidates, screened=False)
+
+        ids = raw.get("relevant_ids")
+        if not isinstance(ids, list):
+            # No verdict at all — not the same thing as "nothing is relevant".
+            logger.warning("relevance screen returned no verdict; keeping all candidates")
+            return RelevanceScreen(candidates, screened=False)
+
+        # Models sometimes echo ids with the t3_ fullname prefix — normalise,
+        # exactly as the retrospective classifier does.
+        keep = {str(i).removeprefix("t3_") for i in ids if isinstance(i, (str, int))}
+        kept = [t for t in batch if t.id in keep]
+        if keep and not kept:
+            # It named ids, and not one of them is a candidate we hold. That is
+            # an answer about some other set of posts; acting on it would
+            # discard a corpus on the strength of a malformed reply.
+            logger.warning("relevance screen named no known candidate; keeping all")
+            return RelevanceScreen(candidates, screened=False)
+
+        logger.info(
+            "relevance screen kept %d of %d candidates", len(kept), len(batch)
+        )
+        return RelevanceScreen(kept, screened=True, rejected=len(batch) - len(kept))
 
     def _fetch_threads(self, chosen: list[RedditThread]) -> list[RedditThread]:
         """Full thread+comment fetches, overlapped.
@@ -427,13 +562,21 @@ class ResearchAgent:
         return plan
 
     def _synthesise(
-        self, query: str, filter_result, subreddits: list[str]
+        self, query: str, filter_result, subreddits: list[str], screen: RelevanceScreen
     ) -> ResearchBrief:
         from agents.confidence import EvidenceStats, assess
+        from agents.evidence import UsableEvidence, verified_claims, verified_prose
         from agents.signal_analysis import analyse_threads
 
         analysis = analyse_threads(filter_result.threads, self._llm)
-        threads = analysis.threads
+        # THE authoritative evidence set for this brief. Everything the user is
+        # shown about the shape of the evidence — the thread count, the
+        # communities, the strong-thread count, the confidence ceiling, the
+        # source list, and whether a model-authored structural claim is allowed
+        # to stand — is derived from this one object below. Nothing recomputes
+        # any of it from an earlier, larger set.
+        evidence = UsableEvidence.of(analysis.threads)
+        threads = evidence.threads
         machine_warnings = analysis.warnings
         corpus = _build_corpus(threads)
         analysis_block = (
@@ -508,14 +651,30 @@ class ResearchAgent:
         # not the ones the planner hoped to read. A community that was
         # searched and yielded nothing did not contribute evidence, and saying
         # otherwise is contradicted by the source list on the same screen.
-        represented = sorted({t.subreddit for t in threads if t.subreddit})
+        represented = list(evidence.represented_subreddits)
+        # Counted over the final corpus, so this can never exceed the thread
+        # count shown next to it: duplicate collapsing can remove a thread that
+        # cleared the bar. The bar itself stays in apply_signal_filters — only
+        # the ids of the threads that cleared it travel here.
+        strong_in_corpus = evidence.strong_thread_count(filter_result.strong_thread_ids)
+
+        # Structural claims the model wrote about its own evidence are checked
+        # against the set above before anyone sees them. This is what stops a
+        # brief printing "8 threads across 4 communities" beside a red flag
+        # saying "all evidence from a single subreddit". The truthful version
+        # of that statement is not lost — when the corpus really is narrow, the
+        # confidence policy emits it deterministically as a reason.
+        red_flags, flags_removed = verified_claims(raw.get("red_flags", []), evidence)
+        bias_notes, notes_removed = verified_prose(raw.get("bias_notes", ""), evidence)
+
         stats = EvidenceStats(
-            usable_thread_count=len(threads),
-            strong_thread_count=filter_result.strong_thread_count,
-            represented_subreddits=tuple(represented),
+            usable_thread_count=evidence.thread_count,
+            strong_thread_count=strong_in_corpus,
+            represented_subreddits=evidence.represented_subreddits,
             filters_relaxed=filter_result.relaxed,
             cross_author_duplicate_count=analysis.cross_author_duplicate_count,
             similarity_analysis_available=analysis.similarity_analysis_available,
+            relevance_screened=screen.screened,
             has_consensus_pick=bool(consensus_pick.strip()),
         )
         outcome = assess(_safe_confidence(raw.get("confidence")), stats)
@@ -531,7 +690,7 @@ class ResearchAgent:
             failure_modes=raw.get("failure_modes", []),
             what_reviewers_miss=raw.get("what_reviewers_miss", []),
             alternatives=raw.get("alternatives", []),
-            red_flags=raw.get("red_flags", []),
+            red_flags=red_flags,
             confidence=outcome.final,
             semantic_confidence=outcome.semantic,
             structural_ceiling=outcome.ceiling,
@@ -539,16 +698,19 @@ class ResearchAgent:
             signal_quality=SignalQuality(
                 subreddits_checked=subreddits,
                 subreddits_represented=represented,
-                usable_thread_count=len(threads),
-                thread_count=len(threads),
-                strong_thread_count=filter_result.strong_thread_count,
+                usable_thread_count=evidence.thread_count,
+                thread_count=evidence.thread_count,
+                strong_thread_count=strong_in_corpus,
                 filters_relaxed=filter_result.relaxed,
                 coordinated_posting_suspected=analysis.cross_author_duplicate_count > 0,
                 duplicate_threads_collapsed=analysis.collapsed_same_author_count,
                 similarity_analysis_available=analysis.similarity_analysis_available,
+                relevance_screened=screen.screened,
+                off_topic_candidates_rejected=screen.rejected,
+                unverified_claims_removed=flags_removed + notes_removed,
                 evidence_state=EvidenceState.OK,
                 date_range=date_range,
-                bias_notes=raw.get("bias_notes", ""),
+                bias_notes=bias_notes,
             ),
             sources=_to_sources(threads),
         )
@@ -708,7 +870,7 @@ def _spread_pick(candidates: list[RedditThread], budget: int) -> list[RedditThre
     return picked
 
 
-def _build_corpus(threads: list[RedditThread]) -> str:
+def _build_corpus(threads: Sequence[RedditThread]) -> str:
     """Rendered thread excerpts for the synthesis prompt. Body and comments
     are truncated to keep total context bounded."""
     from datetime import datetime, timezone
@@ -733,7 +895,7 @@ def _build_corpus(threads: list[RedditThread]) -> str:
     return "\n\n".join(parts)
 
 
-def _to_sources(threads: list[RedditThread]) -> list[SourceThread]:
+def _to_sources(threads: Sequence[RedditThread]) -> list[SourceThread]:
     """Threads the synthesis actually used, as user-facing citations with
     canonical reddit.com links."""
     return [
