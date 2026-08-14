@@ -644,8 +644,12 @@ function MandateSummary() {
     );
   }
   if (!mandate) return null;
-  // An unset cap is zero allowance, so it must never read as permissive.
-  const cap = (v: number | null) => (v === null ? "not set" : `$${v.toFixed(2)}`);
+  // An unset cap is zero allowance, so it must never read as permissive. A
+  // fresh account has an empty mandate ({}), so a field is `undefined` rather
+  // than `null` — treat both as unset, or the nullish field hits .toFixed and
+  // crashes the page on a brand-new user's first Commerce visit.
+  const cap = (v: number | null | undefined) =>
+    v == null ? "not set" : `$${v.toFixed(2)}`;
   return (
     <section className="mb-10">
       <Card className="px-5 py-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
