@@ -87,6 +87,30 @@ class Settings(BaseSettings):
     x402_agent_address: str = ""
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
+
+    # Per-user custodial wallets. Each signed-in account gets its own generated
+    # agent keypair (see services/wallet.ensure_user_wallet); the private key
+    # is Fernet-encrypted with this symmetric key before it touches the
+    # database. The backend holds the key — that is what makes these wallets
+    # custodial. Generate with:
+    #     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    #
+    # Empty disables per-user provisioning: WalletService then falls back to the
+    # single env wallet for everyone, i.e. exactly the pre-003 behaviour. So an
+    # unset key degrades to the old single-tenant demo rather than crashing.
+    wallet_encryption_key: str = ""
+    # What the treasury sends a brand-new user wallet on first provision. XSGD
+    # backs their card and settles their purchases; AVAX is gas so the wallet
+    # can sign its own settlement. Small on purpose: every new account is a
+    # treasury withdrawal, and the Fuji treasury's AVAX is the binding limit
+    # (~0.05 each against ~1 AVAX = ~19 users before a faucet top-up).
+    new_wallet_xsgd_amount: float = 100.0
+    new_wallet_avax_gas: float = 0.05
+    # The owner keeps the env wallet (X402_AGENT_*) rather than a generated one,
+    # so the existing deployment and every test that runs outside a request
+    # keep working unchanged. Flip to False only to force the owner onto a
+    # provisioned wallet too.
+    owner_uses_env_wallet: bool = True
     # Comma-separated extra networks to register the signer for, beyond
     # x402_network. See docs/HACKATHON_SWAP.md.
     x402_extra_networks: str = ""

@@ -4,19 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "../lib/supabase";
-import { api } from "../lib/api";
 import { cn } from "../lib/cn";
 
-// ownerOnly entries touch the agent wallet, the Stripe cardholder or the
-// storefront session — all single global instances, so the backend refuses
-// them for anyone but the owner. Showing them to other accounts would just
-// offer a 403.
+// Every signed-in account now has its own custodial agent wallet, so Commerce
+// and Actions are open to all users — the backend provisions and funds a
+// per-user wallet on first visit rather than 403-ing everyone but the owner.
 const NAV = [
   { href: "/decision", label: "Worth it?" },
   { href: "/research", label: "How it went" },
   { href: "/monitor", label: "Monitor" },
-  { href: "/commerce", label: "Commerce", ownerOnly: true },
-  { href: "/actions", label: "Actions", ownerOnly: true },
+  { href: "/commerce", label: "Commerce" },
+  { href: "/actions", label: "Actions" },
 ];
 
 // App chrome. Hidden on the cinematic landing and the login page (they carry
@@ -25,15 +23,12 @@ export function Header() {
   const pathname = usePathname();
   const router = useRouter();
   const [email, setEmail] = useState<string | null>(null);
-  // null while unknown — hide owner-only tabs until we know, so a guest never
-  // sees them flash in and then vanish.
-  const [isOwner, setIsOwner] = useState<boolean | null>(null);
 
   // Hooks cannot be skipped by the early return below, so the guard has to be
-  // inside the effect. Without it the header still called /me on the landing
-  // and login pages — and api.request() bounces to /login on a 401, so every
-  // signed-out visitor was thrown off the landing page before they could read
-  // it. Never call an authenticated endpoint without a session.
+  // inside the effect. Without it the header still hit an authed endpoint on
+  // the landing and login pages — and api.request() bounces to /login on a
+  // 401, so every signed-out visitor was thrown off the landing page before
+  // they could read it. Never call an authenticated endpoint without a session.
   const isPublic =
     pathname === "/" || pathname === "/login" || pathname === "/signup" ||
     pathname.startsWith("/auth/");
@@ -42,14 +37,6 @@ export function Header() {
     if (isPublic) return;
     supabase.auth.getSession().then(({ data }) => {
       setEmail(data.session?.user?.email ?? null);
-      if (!data.session) {
-        setIsOwner(false);
-        return;
-      }
-      api.me().then(
-        (m) => setIsOwner(m.is_owner),
-        () => setIsOwner(false)
-      );
     });
   }, [pathname, isPublic]);
 
@@ -60,7 +47,7 @@ export function Header() {
     router.push("/login");
   }
 
-  const links = NAV.filter((item) => !item.ownerOnly || isOwner).map((item) => {
+  const links = NAV.map((item) => {
     const active = pathname.startsWith(item.href);
     return (
       <Link

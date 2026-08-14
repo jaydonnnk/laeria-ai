@@ -3,8 +3,10 @@
 Run locally:
     uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 
-Auth: every feature router requires a Supabase Auth bearer token belonging to
-the owner (see core/auth.py). /health and /vendor/* stay open — the vendor
+Auth: every feature router requires a Supabase Auth bearer token (see
+core/auth.py). Most require only a signed-in account — each user has their own
+custodial wallet, data and cards — while the Obsidian vault stays owner-only as
+the one shared local instance. /health and /vendor/* stay open — the vendor
 endpoints are x402 paid resources whose payment IS their access control.
 """
 
@@ -43,20 +45,26 @@ app.add_middleware(
 # core.current_user for the full reasoning.
 app.add_middleware(CurrentUserMiddleware)
 
-# Any signed-in account: per-user data, nothing shared.
+# Any signed-in account: per-user data, nothing shared. The payment routers
+# moved here once each user got their own custodial agent wallet (migration
+# 003 + services/wallet.ensure_user_wallet): the wallet is provisioned and
+# funded per account, cards and actions are already user-scoped rows, and the
+# storefront is a shared read-only catalogue. So a second account acting on
+# these spends its OWN wallet, not the owner's — which is exactly the property
+# require_owner used to stand in for.
 _user = [Depends(require_user)]
 app.include_router(research.router, dependencies=_user)
 app.include_router(monitor.router, dependencies=_user)
+app.include_router(actions.router, dependencies=_user)
+app.include_router(store.router, dependencies=_user)
+app.include_router(cards.router, dependencies=_user)
+app.include_router(wallet.router, dependencies=_user)
 
-# Owner only: these touch the agent wallet key, the Stripe cardholder, the
-# storefront session or the local vault — all single global instances, so a
-# second account here would be spending the owner's money.
+# Owner only: the Obsidian vault is the one genuinely single, local instance —
+# it lives on the owner's machine and no per-user equivalent exists — so it
+# stays gated to the deployment owner.
 _owner = [Depends(require_owner)]
 app.include_router(obsidian.router, dependencies=_owner)
-app.include_router(actions.router, dependencies=_owner)
-app.include_router(store.router, dependencies=_owner)
-app.include_router(cards.router, dependencies=_owner)
-app.include_router(wallet.router, dependencies=_owner)
 
 app.include_router(vendor.router)  # x402: payment is the auth
 

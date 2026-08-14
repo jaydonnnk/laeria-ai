@@ -284,6 +284,41 @@ class WalletService:
         to check, not an implementation detail of a transfer."""
         return self._native_balance(addr)
 
+    def _resolve_agent(self) -> tuple[str, str]:
+        """(address, private_key) of the agent wallet for THIS request's user.
+
+        The agent role is per-user now; the treasury and merchant stay global.
+        Resolution, in order:
+
+          * WALLET_ENCRYPTION_KEY unset  -> the single env wallet, for everyone.
+            Provisioning is off, so the whole module behaves exactly as it did
+            before per-user wallets existed. This branch is FIRST and touches
+            neither current_user nor the DB, which is what keeps every test and
+            script that constructs WalletService() outside a request working.
+          * owner, and OWNER_USES_ENV_WALLET -> the env wallet. The existing
+            deployment and the owner's funded wallet carry on unchanged.
+          * otherwise -> the user's generated wallet from their profile. The
+            private key is returned only when present (reads don't need it);
+            an unprovisioned user yields ("", "") and the caller is expected to
+            have provisioned first (see ensure_user_wallet).
+        """
+        s = self._settings
+        if not s.wallet_encryption_key:
+            return s.x402_agent_address, s.x402_agent_private_key
+
+        from core.current_user import is_owner
+
+        if is_owner() and s.owner_uses_env_wallet:
+            return s.x402_agent_address, s.x402_agent_private_key
+
+        from db import repositories as repo
+
+        wallet = repo.get_user_wallet()
+        if not wallet:
+            return "", ""
+        key = _decrypt_key(wallet["key_encrypted"]) if wallet["key_encrypted"] else ""
+        return wallet["address"], key
+
     def balances(self) -> dict:
         s = self._settings
         out: dict = {
@@ -296,7 +331,10 @@ class WalletService:
             # number every balance below was divided by.
             "token_decimals": self._token_decimals,
         }
-        for role, addr in (("agent", s.x402_agent_address),
+        # The agent is the current user's wallet; the treasury is the one global
+        # faucet everyone funds from.
+        agent_addr, _ = self._resolve_agent()
+        for role, addr in (("agent", agent_addr),
                            ("treasury", s.x402_treasury_address)):
             if not addr:
                 out[role] = {"address": "", "error": "address not configured"}
@@ -314,7 +352,9 @@ class WalletService:
 
     # ---- transfers ----
 
-    def _transfer(self, private_key: str, to_address: str, amount: float) -> dict:
+    def _transfer(
+        self, private_key: str, to_address: str, amount: float, nonce: int | None = None
+    ) -> dict:
         """Sign and broadcast one ERC-20 transfer; return the receipt summary.
 
         The single place this module moves tokens. Both legs of the demo —
@@ -322,6 +362,11 @@ class WalletService:
         the same operation with different endpoints, and keeping them one
         function means the mainnet refusal below cannot be true of one leg and
         forgotten on the other.
+
+        `nonce` is normally read from the chain, but the caller may pin it when
+        it is sending two treasury transfers back to back (gas + token to a new
+        wallet) and cannot wait for the first to mine before the second's nonce
+        is knowable.
 
         Refuses on any mainnet: moving real money is a human act, not an
         endpoint. The check reads the network's `testnet` flag rather than a
@@ -347,7 +392,8 @@ class WalletService:
             )
         sender = Account.from_key(private_key)
 
-        nonce = int(str(self._rpc("eth_getTransactionCount", [sender.address, "pending"])), 16)
+        if nonce is None:
+            nonce = int(str(self._rpc("eth_getTransactionCount", [sender.address, "pending"])), 16)
         gas_price = int(str(self._rpc("eth_gasPrice", [])), 16)
         data = (
             _ERC20_TRANSFER_SELECTOR
@@ -375,17 +421,69 @@ class WalletService:
             "network": self._net["name"],
         }
 
+    def _transfer_native(
+        self, private_key: str, to_address: str, amount: float, nonce: int | None = None
+    ) -> dict:
+        """Sign and broadcast a native-coin (AVAX) transfer; return the receipt.
+
+        Gas, not money. A per-user wallet the treasury just created holds zero
+        AVAX, so it cannot sign its own settlement — the funding leg has to seed
+        it with a little gas as well as the stablecoin. Carries the same
+        testnet-only refusal as `_transfer`: this signs from an endpoint, and
+        that is only ever acceptable on play money.
+        """
+        from eth_account import Account
+
+        if not self._net.get("testnet"):
+            raise WalletError(
+                f"refusing to move funds on {self._net['name']} from an API "
+                "endpoint — moving mainnet funds is a human act"
+            )
+        if amount <= 0:
+            raise WalletError("amount must be positive")
+        if not private_key or not to_address:
+            raise WalletError("signing key / destination address not configured")
+
+        wei = floor(amount * 10**18)
+        if wei <= 0:
+            raise WalletError(f"gas amount {amount} rounds to zero wei")
+        sender = Account.from_key(private_key)
+
+        if nonce is None:
+            nonce = int(str(self._rpc("eth_getTransactionCount", [sender.address, "pending"])), 16)
+        gas_price = int(str(self._rpc("eth_gasPrice", [])), 16)
+        tx = {
+            "chainId": self._net["chain_id"],
+            "nonce": nonce,
+            "to": to_address,
+            "value": wei,
+            "gas": 21_000,  # a plain value transfer is always exactly this
+            "gasPrice": max(gas_price, 100_000),
+        }
+        signed = sender.sign_transaction(tx)
+        tx_hash = str(self._rpc("eth_sendRawTransaction", [signed.raw_transaction.to_0x_hex()]))
+        return {
+            "tx_hash": tx_hash,
+            "explorer_url": self._net["explorer_tx"] + tx_hash,
+            "amount_native": round(wei / 10**18, 18),
+            "native_symbol": self._net["native_symbol"],
+            "from": sender.address,
+            "to": to_address,
+            "network": self._net["name"],
+        }
+
     def fund_agent(self, amount_usd: float) -> dict:
-        """Transfer testnet tokens treasury → agent and return the tx hash."""
+        """Transfer testnet tokens treasury → the current user's agent wallet
+        and return the tx hash. The destination is resolved per-user, so the
+        'Fund agent' button tops up the caller's own wallet, not a shared one."""
         s = self._settings
-        if not s.x402_treasury_private_key or not s.x402_agent_address:
+        agent_addr, _ = self._resolve_agent()
+        if not s.x402_treasury_private_key or not agent_addr:
             raise WalletError("treasury key / agent address not configured")
-        out = self._transfer(
-            s.x402_treasury_private_key, s.x402_agent_address, amount_usd
-        )
+        out = self._transfer(s.x402_treasury_private_key, agent_addr, amount_usd)
         logger.info(
-            "funded agent with %.2f %s: %s",
-            out["amount_usd"], out["token_symbol"], out["tx_hash"],
+            "funded agent %s with %.2f %s: %s",
+            agent_addr, out["amount_usd"], out["token_symbol"], out["tx_hash"],
         )
         return out
 
@@ -406,10 +504,14 @@ class WalletService:
                 "no settlement destination — set MERCHANT_SETTLEMENT_ADDRESS "
                 "(or X402_TREASURY_ADDRESS)"
             )
-        if not s.x402_agent_private_key:
-            raise WalletError("X402_AGENT_PRIVATE_KEY not configured — the agent "
+        # The agent that pays is the current user's wallet, and it signs with
+        # its own key — settlement moves the buyer's own stablecoin, never a
+        # shared pot.
+        _, agent_key = self._resolve_agent()
+        if not agent_key:
+            raise WalletError("the agent wallet has no signing key — the agent "
                               "cannot sign its own settlement")
-        out = self._transfer(s.x402_agent_private_key, merchant, amount)
+        out = self._transfer(agent_key, merchant, amount)
         logger.info(
             "settled %.2f %s to merchant %s: %s",
             out["amount_usd"], out["token_symbol"], merchant, out["tx_hash"],
@@ -423,3 +525,119 @@ class WalletService:
         except Exception as exc:  # noqa: BLE001
             logger.error("wallet healthcheck failed: %s", exc)
             return False
+
+
+# ---- per-user wallet provisioning ----------------------------------------
+#
+# A custodial keypair per user: generated here, the private key Fernet-encrypted
+# with WALLET_ENCRYPTION_KEY before it is stored, decrypted only to sign. The
+# backend holds the key, which is what makes these wallets custodial rather than
+# self-sovereign — a deliberate scope choice, not the spec's "non-custodial".
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+
+    key = get_settings().wallet_encryption_key
+    if not key:
+        raise WalletError("WALLET_ENCRYPTION_KEY is not set — cannot handle wallet keys")
+    return Fernet(key.encode())
+
+
+def _encrypt_key(private_key_hex: str) -> str:
+    return _fernet().encrypt(private_key_hex.encode()).decode()
+
+
+def _decrypt_key(token: str) -> str:
+    return _fernet().decrypt(token.encode()).decode()
+
+
+def _fund_new_wallet(address: str) -> dict:
+    """Seed a freshly created wallet from the treasury: gas first, then XSGD.
+
+    Best-effort by contract — it returns a status dict and never raises. A
+    provision that stored the wallet but failed to fund it must not 500 the
+    request that triggered it; the wallet exists and can be topped up later, and
+    'provisioned but unfunded' is a recoverable, honestly-reportable state.
+
+    Gas is sent BEFORE the token and on a pinned nonce pair, because the two
+    treasury transfers go out back to back and the second cannot wait for the
+    first to mine to learn its nonce.
+    """
+    from eth_account import Account
+
+    s = get_settings()
+    if not s.x402_treasury_private_key:
+        return {"funded": False, "reason": "no treasury key configured"}
+    try:
+        svc = WalletService()
+        treasury_addr = Account.from_key(s.x402_treasury_private_key).address
+        base_nonce = int(
+            str(svc._rpc("eth_getTransactionCount", [treasury_addr, "pending"])), 16
+        )
+        gas = svc._transfer_native(
+            s.x402_treasury_private_key, address, s.new_wallet_avax_gas, nonce=base_nonce
+        )
+        xsgd = svc._transfer(
+            s.x402_treasury_private_key, address, s.new_wallet_xsgd_amount,
+            nonce=base_nonce + 1,
+        )
+        logger.info(
+            "provisioned wallet %s: %.4f %s gas (%s), %.2f %s (%s)",
+            address, gas["amount_native"], gas["native_symbol"], gas["tx_hash"],
+            xsgd["amount_usd"], xsgd["token_symbol"], xsgd["tx_hash"],
+        )
+        return {"funded": True, "gas_tx": gas["tx_hash"], "xsgd_tx": xsgd["tx_hash"]}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("wallet %s stored but funding failed: %s", address, exc)
+        return {"funded": False, "reason": str(exc)}
+
+
+def ensure_user_wallet() -> dict:
+    """Guarantee the current request's user has an agent wallet, and return a
+    status dict {address, provisioned, funded?, reason?}. Idempotent: an
+    existing wallet is returned untouched.
+
+    Three non-provisioning short-circuits, matching WalletService._resolve_agent
+    so the two never disagree about which wallet an account uses:
+
+      * no WALLET_ENCRYPTION_KEY -> provisioning is off; report the env wallet.
+      * owner + OWNER_USES_ENV_WALLET -> the owner keeps the env wallet.
+      * already provisioned -> return it, no treasury spend.
+
+    Only a brand-new non-owner account reaches the generate-and-fund path, so
+    the treasury is touched exactly once per user, on their first visit.
+    """
+    s = get_settings()
+    if not s.wallet_encryption_key:
+        return {
+            "address": s.x402_agent_address,
+            "provisioned": False,
+            "reason": "provisioning disabled (WALLET_ENCRYPTION_KEY unset)",
+        }
+
+    from core.current_user import is_owner
+
+    if is_owner() and s.owner_uses_env_wallet:
+        return {
+            "address": s.x402_agent_address,
+            "provisioned": False,
+            "reason": "owner uses the env wallet",
+        }
+
+    from db import repositories as repo
+
+    existing = repo.get_user_wallet()
+    if existing:
+        return {"address": existing["address"], "provisioned": True, "funded": None}
+
+    from eth_account import Account
+
+    acct = Account.create()
+    address = acct.address
+    # eth_account exposes the key as HexBytes; .to_0x_hex() gives the 0x form
+    # that Account.from_key round-trips.
+    private_key_hex = acct.key.to_0x_hex()
+    repo.set_user_wallet(address, _encrypt_key(private_key_hex))
+    funding = _fund_new_wallet(address)
+    return {"address": address, "provisioned": True, **funding}

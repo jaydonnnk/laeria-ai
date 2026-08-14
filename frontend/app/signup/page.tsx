@@ -118,8 +118,8 @@ function Signup() {
         </div>
 
         <p className="mt-4 text-center text-xs text-ink-subtle">
-          Research modes are open to everyone. The payment rail runs on the
-          owner&apos;s own wallet and stays with them.
+          Every account gets its own testnet agent wallet, funded automatically
+          on your first visit to Commerce — nothing you set up by hand.
         </p>
       </div>
     </main>

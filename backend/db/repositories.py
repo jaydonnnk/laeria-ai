@@ -227,6 +227,57 @@ def set_mandate(mandate: dict) -> dict:
     return res.data[0].get("mandate") or {}
 
 
+# ---- per-user wallet (profiles.wallet_address / wallet_key_encrypted) ----
+
+
+def get_user_wallet() -> dict | None:
+    """The current user's provisioned wallet, or None if not provisioned yet.
+
+    Returns {"address", "key_encrypted"}. The encrypted key never leaves the
+    backend — only WalletService decrypts it, and only to sign. A profile row
+    that exists but has no wallet_address reads as None, same as no row.
+    """
+    res = (
+        get_supabase()
+        .table("profiles")
+        .select("wallet_address, wallet_key_encrypted")
+        .eq("id", _owner())
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    if not row.get("wallet_address"):
+        return None
+    return {
+        "address": row["wallet_address"],
+        "key_encrypted": row.get("wallet_key_encrypted") or "",
+    }
+
+
+def set_user_wallet(address: str, key_encrypted: str) -> dict:
+    """Persist a freshly generated wallet for the current user. Upsert so it
+    creates the profile row if the account never set a mandate first."""
+    res = (
+        get_supabase()
+        .table("profiles")
+        .upsert(
+            {
+                "id": _owner(),
+                "wallet_address": address,
+                "wallet_key_encrypted": key_encrypted,
+            }
+        )
+        .execute()
+    )
+    row = res.data[0]
+    return {
+        "address": row["wallet_address"],
+        "key_encrypted": row.get("wallet_key_encrypted") or "",
+    }
+
+
 # ---- actions ----
 
 def create_action(

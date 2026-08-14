@@ -11,9 +11,12 @@ request can.
 Two properties matter:
 
 1. Repository queries scope to the SIGNED-IN user, not a constant.
-2. Anything that spends stays owner-only. The agent wallet key, the Stripe
-   cardholder and the storefront session are single global instances, so data
-   scoping cannot separate them — only the auth level can.
+2. The payment routes require a signed-in account, and each account spends its
+   OWN per-user custodial wallet (migration 003). They are no longer owner-only
+   — that gate was a stand-in for "don't let a guest spend the one shared
+   wallet", and a per-user wallet removes the shared part. The Obsidian vault
+   stays owner-only: it is the one genuinely single, machine-local instance
+   with no per-user equivalent.
 """
 
 from __future__ import annotations
@@ -140,35 +143,51 @@ def test_bad_token_is_401(probe):
     assert get(probe, "/as-user", "not-a-real-token").status_code == 401
 
 
-# ---- the money endpoints on the REAL app are wired to the owner dependency ----
+# ---- the money endpoints on the REAL app are wired to the right dependency ----
 
-def test_spending_routers_require_owner():
-    """Guards against a future router being added to the wrong list."""
-    from api.main import app
-
-    owner_only = {"/actions", "/cards", "/wallet", "/store", "/obsidian"}
-    seen: dict[str, set] = {}
+def _router_dep_names(app, prefix: str) -> set:
+    names: set = set()
     for route in app.routes:
         path = getattr(route, "path", "")
-        prefix = "/" + path.lstrip("/").split("/")[0] if path.strip("/") else ""
-        if prefix not in owner_only:
+        route_prefix = "/" + path.lstrip("/").split("/")[0] if path.strip("/") else ""
+        if route_prefix != prefix:
             continue
-        names = {
+        names.update(
             getattr(d.dependency, "__name__", "")
             for d in getattr(route, "dependencies", [])
-        }
-        seen.setdefault(prefix, set()).update(names)
+        )
+    return names
 
-    for prefix in owner_only:
-        assert prefix in seen, f"{prefix} routes not found"
-        assert "require_owner" in seen[prefix], (
-            f"{prefix} is not owner-gated — a guest could reach the shared "
-            "wallet, cardholder or storefront"
+
+def test_payment_routers_require_signin_not_owner():
+    """The payment routers moved from owner-only to any-signed-in-user once
+    each account got its own wallet. Guards against one being left on the owner
+    gate (which would 403 every normal user) or dropped to no gate at all
+    (which would let a guest reach them unauthenticated)."""
+    from api.main import app
+
+    for prefix in ("/actions", "/cards", "/wallet", "/store"):
+        names = _router_dep_names(app, prefix)
+        assert names, f"{prefix} routes not found"
+        assert "require_user" in names, f"{prefix} must require a signed-in account"
+        assert "require_owner" not in names, (
+            f"{prefix} is still owner-gated — normal users would get a 403"
         )
 
 
-def test_research_act_is_owner_gated():
-    """The one research endpoint that spends."""
+def test_obsidian_stays_owner_only():
+    """The one shared, machine-local instance keeps the owner gate."""
+    from api.main import app
+
+    names = _router_dep_names(app, "/obsidian")
+    assert names, "/obsidian routes not found"
+    assert "require_owner" in names, "/obsidian is the owner's local vault"
+
+
+def test_research_act_requires_signin():
+    """The one research endpoint that spends. It now spends the caller's own
+    wallet, so it needs a signed-in account — but must not be owner-only, or a
+    normal user's 'Worth it? -> act' would 403 while Commerce lets it through."""
     from api.main import app
 
     for route in app.routes:
@@ -177,6 +196,10 @@ def test_research_act_is_owner_gated():
                 getattr(d.dependency, "__name__", "")
                 for d in getattr(route, "dependencies", [])
             }
-            assert "require_owner" in names, "/research/act spends and must be owner-only"
+            assert "require_user" in names, "/research/act must require a signed-in account"
+            assert "require_owner" not in names, (
+                "/research/act spends the caller's own wallet — owner-gating it "
+                "would 403 normal users"
+            )
             return
     pytest.fail("/research/act not found")

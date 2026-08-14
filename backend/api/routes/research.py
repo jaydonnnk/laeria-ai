@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from agents.research_agent import ResearchAgent
-from core.auth import require_owner
+from core.auth import require_user
 from core.logging import get_logger
 from core.models import OutcomeSummary, ResearchBrief
 
@@ -55,15 +55,18 @@ class ActOnBriefRequest(BaseModel):
     confidence: str = Field(pattern="^(high|moderate|low)$")
 
 
-@router.post("/act", dependencies=[Depends(require_owner)])
+@router.post("/act", dependencies=[Depends(require_user)])
 def act_on_brief(req: ActOnBriefRequest) -> dict:
     """The plan's core promise: consensus strong -> agent buys. Server-side
     integrity gate — refuses to act on weak research regardless of what the
     UI sends. The purchase itself goes through the same mandate/approval
     pipeline as any other action.
 
-    Owner-only despite living on the research router: this is the one research
-    endpoint that spends, and it spends from the single shared agent wallet.
+    Signed-in, not owner-only: this endpoint spends, but it now spends the
+    caller's OWN per-user agent wallet through the mandate pipeline, exactly
+    like the Commerce and Actions routes. Gating it to the owner while those
+    are open to everyone would 403 a normal user's 'Worth it? -> act' while
+    letting the same purchase through on the Commerce page.
     """
     if req.confidence == "low":
         raise HTTPException(

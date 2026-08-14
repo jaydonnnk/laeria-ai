@@ -554,6 +554,12 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
     <section className="mb-10">
       <SectionHeader n="01" title="Fund" aside={balances?.network ?? "…"} />
       {err && <SectionNotice message={err} onRetry={refresh} />}
+      <p className="text-sm text-ink-muted max-w-[46rem] mb-4">
+        The <b>agent</b> wallet is this account&apos;s own — generated and
+        seeded from the shared <b>treasury</b> faucet on your first visit. Top
+        it up below; only this wallet&apos;s balance backs your cards and
+        settles your purchases.
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         {(["agent", "treasury"] as const).map((role) => {
           const party = balances?.[role];
