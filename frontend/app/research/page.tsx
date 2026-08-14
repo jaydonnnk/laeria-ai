@@ -111,30 +111,27 @@ function OutcomesCard({ s }: { s: OutcomeSummary }) {
           <Badge status={s.confidence}>{s.confidence} confidence</Badge>
         </div>
 
+        {/* A slice narrower than about a tenth of the bar cannot hold "12%"
+            without the label spilling over its own colour, so below that the
+            slice keeps its width and drops the number. The legend underneath
+            still names every share. */}
         <div className="flex rounded-[--radius-sm] overflow-hidden h-7 mb-3">
-          {s.pct_positive > 0 && (
-            <div
-              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-success min-w-0"
-              style={{ flex: s.pct_positive }}
-            >
-              {pctFmt(s.pct_positive)}
-            </div>
-          )}
-          {s.pct_mixed > 0 && (
-            <div
-              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-warning min-w-0"
-              style={{ flex: s.pct_mixed }}
-            >
-              {pctFmt(s.pct_mixed)}
-            </div>
-          )}
-          {s.pct_negative > 0 && (
-            <div
-              className="tnum flex items-center justify-center text-white text-xs font-semibold bg-danger min-w-0"
-              style={{ flex: s.pct_negative }}
-            >
-              {pctFmt(s.pct_negative)}
-            </div>
+          {(
+            [
+              [s.pct_positive, "bg-success"],
+              [s.pct_mixed, "bg-warning"],
+              [s.pct_negative, "bg-danger"],
+            ] as const
+          ).map(([pct, bg], i) =>
+            pct > 0 ? (
+              <div
+                key={i}
+                className={`tnum flex items-center justify-center text-white text-xs font-semibold min-w-0 ${bg}`}
+                style={{ flex: pct }}
+              >
+                {pct >= 0.1 ? pctFmt(pct) : ""}
+              </div>
+            ) : null
           )}
         </div>
         <p className="text-[13px] text-ink-subtle">

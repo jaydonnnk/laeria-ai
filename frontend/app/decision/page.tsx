@@ -9,12 +9,14 @@ import {
   ResearchBrief,
   SignalQuality,
 } from "../../lib/api";
-import { Sources } from "../../components/Sources";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Badge } from "../../components/ui/Badge";
 import { Banner } from "../../components/ui/Banner";
 import { Input, Textarea, Field } from "../../components/ui/Input";
+import { ConfidenceFlow } from "../../components/decision/ConfidenceFlow";
+import { EvidencePanel } from "../../components/decision/EvidencePanel";
+import { ResearchProgress } from "../../components/decision/ResearchProgress";
 
 /** Turn a consensus sentence into a short, searchable store query. */
 function searchSeed(pick: string): string {
@@ -148,8 +150,9 @@ function confidenceHeadline(v: {
 }): string {
   if (!v.calibrationAvailable) {
     // Deployment mismatch, not a product state. Saying anything about what
-    // the structural layer concluded would be inventing it.
-    return "This result came from a backend version that does not expose the structural confidence breakdown, so no calibrated explanation is available for it. Refresh after the backend update to see evidence reasons.";
+    // the evidence check concluded would be inventing it — but the person
+    // reading this does not need to hear about backend versions either.
+    return "The detailed confidence check isn’t available for this result yet. Refresh after the latest update to see the full breakdown.";
   }
   if (!v.consensusPick.trim()) {
     return "No consensus pick was produced, so the verdict is low confidence regardless of what the analysis or the evidence structure supported.";
@@ -288,13 +291,7 @@ export default function DecisionPage() {
         </form>
       </Card>
 
-      {loading && (
-        <Banner tone="info" className="mb-6">
-          Reading Reddit threads — identifying communities, pulling threads,
-          synthesising.
-          <span className="tnum ml-2 text-ink-subtle">{elapsed.toFixed(0)}s</span>
-        </Banner>
-      )}
+      {loading && <ResearchProgress seconds={elapsed} />}
       {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}
 
       {brief && <BriefCard brief={brief} />}
@@ -326,8 +323,12 @@ export default function DecisionPage() {
             Anything above your confirm threshold waits for your approval
             instead of executing.
           </p>
-          <div className="flex flex-wrap items-center gap-2">
+          {/* One obvious next step. The store handoff is the action the page
+              exists for; the test payment is a different rail entirely and
+              used to sit beside it as an equal-looking third button. */}
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
             <Button
+              className="w-full sm:w-auto"
               onClick={() =>
                 router.push(
                   `/commerce?q=${encodeURIComponent(searchSeed(brief.consensus_pick))}&auto=1`
@@ -338,16 +339,29 @@ export default function DecisionPage() {
             </Button>
             <Button
               variant="secondary"
+              className="w-full sm:w-auto"
               onClick={() =>
                 router.push(`/commerce?q=${encodeURIComponent(searchSeed(brief.consensus_pick))}`)
               }
             >
               Browse the store first
             </Button>
-            <Button variant="secondary" onClick={executePurchase} disabled={acting}>
-              {acting ? "Proposing…" : "Pay via x402 (demo vendor)"}
-            </Button>
           </div>
+          <details className="mt-4">
+            <summary className="text-[13px] text-ink-subtle cursor-pointer hover:text-ink-muted transition-colors">
+              More options
+            </summary>
+            <div className="mt-3">
+              <p className="text-[13px] text-ink-muted mb-2 max-w-[36rem]">
+                A separate rail for paying online services directly, rather than
+                buying a physical product. This proposes a one-cent payment to
+                our own test service so you can watch the mandate check run.
+              </p>
+              <Button variant="secondary" size="sm" onClick={executePurchase} disabled={acting}>
+                {acting ? "Proposing…" : "Try a small test payment (1 cent)"}
+              </Button>
+            </div>
+          </details>
           {actOutcome && <p className="mt-3 text-sm text-success">{actOutcome}</p>}
         </Card>
       )}
@@ -406,12 +420,29 @@ function NoVerdictCard({ brief }: { brief: ResearchBrief }) {
  */
 function WhyThisConfidence({ brief }: { brief: ResearchBrief }) {
   const v = readBrief(brief);
+
+  // No breakdown means no flow to draw. Showing three boxes built from
+  // fallback values would picture a check that never ran.
+  if (!v.calibrationAvailable) {
+    return (
+      <Card className="p-5">
+        <div className="eyebrow mb-2">Why this confidence</div>
+        <p className="text-sm text-ink-muted">{confidenceHeadline(v)}</p>
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-5">
-      <div className="eyebrow mb-2">Why this confidence</div>
-      <p className="text-sm text-ink">{confidenceHeadline(v)}</p>
+      <div className="eyebrow mb-3">Why this confidence</div>
+      <ConfidenceFlow
+        semantic={v.semantic}
+        ceiling={v.ceiling}
+        final={v.confidence}
+        hasPick={Boolean(v.consensusPick.trim())}
+      />
       {v.reasons.length > 0 && (
-        <ul className="grid gap-2 mt-3">
+        <ul className="grid gap-2 mt-4 pt-4 border-t border-hairline">
           {v.reasons.map((reason, i) => (
             <li key={i} className="flex gap-2.5 text-sm leading-snug text-ink-muted">
               <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-ink-subtle" />
@@ -420,14 +451,27 @@ function WhyThisConfidence({ brief }: { brief: ResearchBrief }) {
           ))}
         </ul>
       )}
-      {v.calibrationAvailable && (
-        <p className="text-[13px] text-ink-subtle mt-3">
-          The model judges whether people agree; deterministic rules decide how
-          much confidence that evidence is allowed to earn. Rules can only lower
-          a verdict, never raise one.
-        </p>
-      )}
+      <p className="text-[13px] text-ink-subtle mt-3">
+        The AI reads the discussions and gives an opinion. laeria separately
+        checks whether the evidence is strong enough to back it — and that check
+        can only lower the verdict, never raise it.
+      </p>
     </Card>
+  );
+}
+
+/** One count with its label, for the fact strip under the verdict.
+ *
+ *  Counts only — short values that cannot outgrow their column. Anything
+ *  sentence-shaped (the date span, the community list) goes on the full-width
+ *  line below instead, where it has room to wrap. Nothing here truncates:
+ *  cutting a fact in half is worse than letting the card grow. */
+function Fact({ value, label }: { value: React.ReactNode; label: string }) {
+  return (
+    <div>
+      <div className="tnum text-[17px] font-medium text-ink leading-none">{value}</div>
+      <div className="eyebrow mt-1.5">{label}</div>
+    </div>
   );
 }
 
@@ -436,29 +480,58 @@ function BriefCard({ brief }: { brief: ResearchBrief }) {
   if (v.evidenceState !== "ok") return <NoVerdictCard brief={brief} />;
 
   const unsearched = v.checked.length - v.represented.length;
+  const hasSecondary =
+    brief.what_reviewers_miss.length > 0 ||
+    brief.alternatives.length > 0 ||
+    Boolean(v.biasNotes);
+
   return (
     <div className="grid gap-4">
-      <Card className="p-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Verdict</h2>
-          <Badge status={v.confidence}>{v.confidence} confidence</Badge>
+      {/* ---- The verdict, given the weight it deserves ----
+          Everything below used to be a same-sized white box, so the answer
+          competed with "what review sites miss" for attention. */}
+      <Card className="p-6 md:p-7">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div className="eyebrow">Verdict</div>
+          <Badge status={v.confidence} className="shrink-0">
+            {v.confidence} confidence
+          </Badge>
         </div>
-        <p className="text-[17px] leading-relaxed text-ink">
+        {/* break-words: a recommendation can contain a long unbroken model
+            name, and it must never widen the card past the screen. */}
+        <p className="text-[19px] md:text-[22px] leading-[1.4] tracking-[-0.01em] text-ink font-medium break-words">
           {v.consensusPick || "No clear community consensus found."}
         </p>
-        {/* Communities that actually contributed threads — never the ones the
-            planner merely searched. The source list below is the receipt. */}
-        <p className="text-[13px] text-ink-subtle mt-2">
-          Based on <span className="tnum">{v.usableThreads}</span> threads across{" "}
-          {v.represented.map((s) => `r/${s}`).join(", ") || "no community"}
-          {v.dateRange ? ` · ${v.dateRange}` : ""}
-          {unsearched > 0 && (
-            <>
-              {" "}· searched <span className="tnum">{v.checked.length}</span>{" "}
-              communities in total
-            </>
+
+        {/* Counts at a glance. `flex-wrap` rather than a fixed column count so
+            two facts or three both sit evenly, and a wrap is graceful. */}
+        <div className="mt-5 pt-4 border-t border-hairline flex flex-wrap gap-x-8 sm:gap-x-10 gap-y-4">
+          <Fact value={v.usableThreads} label="threads read" />
+          <Fact value={v.represented.length} label="communities" />
+          {brief.red_flags.length > 0 && (
+            <Fact value={brief.red_flags.length} label="red flags" />
           )}
-        </p>
+        </div>
+
+        {/* The full-width meta line: community names and the date span both
+            live here, where they can wrap instead of being clipped. */}
+        {(v.represented.length > 0 || v.dateRange) && (
+          <p className="text-[13px] leading-relaxed text-ink-subtle mt-4 break-words">
+            {v.represented.map((s) => `r/${s}`).join(" · ")}
+            {v.dateRange && (
+              <>
+                {v.represented.length > 0 ? " · " : ""}
+                discussions from {v.dateRange}
+              </>
+            )}
+            {unsearched > 0 && (
+              <>
+                {" "}· searched <span className="tnum">{v.checked.length}</span>{" "}
+                communities in total
+              </>
+            )}
+          </p>
+        )}
         {/* Says only what is provable: how many threads cleared the bar. NOT
             that weaker threads were admitted — four strong threads and no weak
             ones still relaxes, because the count fell short of the target. */}
@@ -474,20 +547,71 @@ function BriefCard({ brief }: { brief: ResearchBrief }) {
 
       <WhyThisConfidence brief={brief} />
 
-      <ListSection title="What users praise" items={brief.strengths} tone="success" />
-      <ListSection title="Red flags" items={brief.red_flags} tone="danger" />
-      <ListSection title="Known failure modes" items={brief.failure_modes} />
-      <ListSection title="What review sites miss" items={brief.what_reviewers_miss} />
-      <ListSection title="Alternatives the community mentions" items={brief.alternatives} />
+      <EvidencePanel sources={brief.sources} />
 
-      {v.biasNotes && (
-        <Card className="p-5 bg-warning-soft border-warning/20">
-          <div className="eyebrow mb-2">Signal quality note</div>
-          <p className="text-sm text-ink-muted">{v.biasNotes}</p>
+      {/* ---- The two questions a buyer actually has, side by side ----
+          Two columns only when there are two things to compare: one card
+          alone in a two-column grid leaves an empty half that reads as a
+          missing panel rather than a deliberate layout. */}
+      <div
+        className={
+          brief.strengths.length > 0 && brief.red_flags.length > 0
+            ? "grid gap-4 md:grid-cols-2 items-start"
+            : "grid gap-4"
+        }
+      >
+        <ListSection title="What people like" items={brief.strengths} tone="success" />
+        <ListSection title="Problems people report" items={brief.red_flags} tone="danger" />
+      </div>
+
+      <ListSection title="Known failure modes" items={brief.failure_modes} />
+
+      {/* ---- Everything else, quieter and out of the way ----
+          Kept in full, just not competing with the answer. */}
+      {hasSecondary && (
+        <Card className="p-5">
+          <details>
+            <summary className="text-sm font-medium text-ink cursor-pointer hover:text-accent transition-colors">
+              More detail from the threads
+            </summary>
+            <div className="mt-4 grid gap-5">
+              <PlainList
+                title="What review sites miss"
+                items={brief.what_reviewers_miss}
+              />
+              <PlainList
+                title="Alternatives the community mentions"
+                items={brief.alternatives}
+              />
+              {v.biasNotes && (
+                <div>
+                  <div className="eyebrow mb-2">Signal quality note</div>
+                  <p className="text-sm text-ink-muted">{v.biasNotes}</p>
+                </div>
+              )}
+            </div>
+          </details>
         </Card>
       )}
+    </div>
+  );
+}
 
-      <Sources sources={brief.sources} />
+/** A secondary list — no card of its own, so it stays quiet inside the
+ *  collapsed section. */
+function PlainList({ title, items }: { title: string; items: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div>
+      <div className="eyebrow mb-2">{title}</div>
+      <ul className="grid gap-2">
+        {items.map((item, i) => (
+          <li key={i} className="flex gap-2.5 text-sm leading-snug text-ink-muted">
+            <span className="mt-1.5 w-1.5 h-1.5 rounded-full shrink-0 bg-ink-subtle" />
+            {item}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

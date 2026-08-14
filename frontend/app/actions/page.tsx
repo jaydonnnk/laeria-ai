@@ -121,9 +121,8 @@ export default function ActionsPage() {
           Actions &amp; mandate
         </h1>
         <p className="mt-3 text-ink-muted max-w-[46rem]">
-          The standing rules your agent operates within — a co-signed spending
-          mandate — and every payment it has taken or wants to take. Real x402,
-          XSGD on Avalanche.
+          The rules your agent must follow, and every payment it has made or
+          wants to make. Nothing is spent outside these limits.
         </p>
       </div>
 
@@ -132,9 +131,48 @@ export default function ActionsPage() {
 
       <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-10">
         <div>
+          {/* Waiting for a decision — first, always.
+              A request to spend real money is the most urgent thing on this
+              page, and it used to sit below the settings form. */}
+          {pending.length > 0 && (
+            <section className="mb-10">
+              <SectionHeader
+                title="Waiting for your approval"
+                aside={`${pending.length} pending`}
+              />
+              <div className="grid gap-3">
+                {pending.map((a) => (
+                  <Card key={a.id} className="p-5 border-l-2 border-l-warning">
+                    <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap mb-2">
+                      <Badge tone="warning">{a.type}</Badge>
+                      <span className="tnum text-ink font-medium">${a.amount_usd.toFixed(2)}</span>
+                    </div>
+                    {/* On its own line: a purchase description can be long,
+                        and squeezing it beside the badge and the amount made
+                        it wrap into a ragged block. */}
+                    <p className="text-sm text-ink-muted break-words">
+                      {String(a.metadata?.description ?? a.target)}
+                    </p>
+                    <p className="text-[13px] text-ink-subtle mt-1.5 mb-4 break-words">
+                      {String(a.metadata?.reason ?? "")} · window expires 10 min after proposal
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Button onClick={() => decide(a.id, true)} disabled={busy}>
+                        Approve &amp; execute
+                      </Button>
+                      <Button variant="secondary" onClick={() => decide(a.id, false)} disabled={busy}>
+                        Reject
+                      </Button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Mandate form */}
           <section className="mb-10">
-            <SectionHeader title="Mandate" aside="the guardrail" />
+            <SectionHeader title="Spending rules" aside="the guardrail" />
             <Card className="p-6">
               <form onSubmit={saveMandate} className="grid gap-5 max-w-[440px]">
                 <label className="flex items-start gap-3 cursor-pointer">
@@ -182,48 +220,18 @@ export default function ActionsPage() {
             </Card>
           </section>
 
-          {/* Pending approvals */}
-          {pending.length > 0 && (
-            <section className="mb-10">
-              <SectionHeader title="Awaiting your approval" aside={`${pending.length} pending`} />
-              <div className="grid gap-3">
-                {pending.map((a) => (
-                  <Card key={a.id} className="p-5 border-l-2 border-l-warning">
-                    <div className="flex items-center gap-2 flex-wrap mb-1">
-                      <Badge tone="warning">{a.type}</Badge>
-                      <span className="tnum text-ink font-medium">${a.amount_usd.toFixed(2)}</span>
-                      <span className="text-sm text-ink-muted">
-                        {String(a.metadata?.description ?? a.target)}
-                      </span>
-                    </div>
-                    <p className="text-[13px] text-ink-subtle mb-3">
-                      {String(a.metadata?.reason ?? "")} · window expires 10 min after proposal
-                    </p>
-                    <div className="flex gap-2">
-                      <Button onClick={() => decide(a.id, true)} disabled={busy}>
-                        Approve &amp; execute
-                      </Button>
-                      <Button variant="secondary" onClick={() => decide(a.id, false)} disabled={busy}>
-                        Reject
-                      </Button>
-                    </div>
-                  </Card>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Test rail */}
+          {/* Test payment */}
           <section className="mb-10">
-            <SectionHeader title="Test the rail" aside="real x402 · $0.01" />
+            <SectionHeader title="Try a small test payment" aside="one cent, real payment" />
             <Card className="p-5">
               <p className="text-sm text-ink-muted mb-4 max-w-[42rem]">
-                Proposes buying the $0.01 paywalled report from the demo vendor.
-                If the mandate clears it, the agent pays autonomously; otherwise
-                it lands above for your approval.
+                Asks the agent to buy a one-cent report from our own test
+                service. If your rules allow it, the agent pays by itself;
+                otherwise it appears at the top of this page for your approval.
+                It is the quickest way to watch the rules being checked.
               </p>
               <Button variant="secondary" onClick={testPurchase} disabled={busy}>
-                {busy ? "Working…" : "Propose $0.01 test purchase"}
+                {busy ? "Working…" : "Propose a $0.01 test purchase"}
               </Button>
             </Card>
           </section>
@@ -244,27 +252,27 @@ export default function ActionsPage() {
               {actions.map((a) => (
                 <Card key={a.id} className="px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-x-2 gap-y-1.5 flex-wrap min-w-0">
                       <Badge tone={STATUS_TONE[a.status] ?? "neutral"}>
                         {a.status.replace("_", " ")}
                       </Badge>
                       <span className="text-sm text-ink-muted">{a.type}</span>
                       <span className="tnum text-sm text-ink">${a.amount_usd.toFixed(2)}</span>
-                      <span className="text-sm text-ink-subtle">
+                      <span className="text-sm text-ink-subtle break-words min-w-0">
                         {String(a.metadata?.description ?? "")}
                       </span>
                     </div>
-                    <span className="tnum text-xs text-ink-subtle whitespace-nowrap">
+                    <span className="tnum text-xs text-ink-subtle whitespace-nowrap shrink-0">
                       {new Date(a.created_at).toLocaleString()}
                     </span>
                   </div>
                   {typeof a.metadata?.mandate_violation === "string" && (
-                    <p className="mt-1.5 text-[13px] text-danger">
+                    <p className="mt-1.5 text-[13px] text-danger break-words">
                       refused: {a.metadata.mandate_violation}
                     </p>
                   )}
                   {typeof a.metadata?.error === "string" && (
-                    <p className="mt-1.5 text-[13px] text-danger">{a.metadata.error}</p>
+                    <p className="mt-1.5 text-[13px] text-danger break-words">{a.metadata.error}</p>
                   )}
                 </Card>
               ))}
@@ -272,16 +280,40 @@ export default function ActionsPage() {
           </section>
         </div>
 
-        {/* Usage rail */}
+        {/* Usage rail. The two figures a person actually cares about are shown;
+            the rest are engine counters that mean nothing outside the team, so
+            they are kept but folded away rather than leading the panel. */}
         <aside className="lg:sticky lg:top-20 lg:self-start">
           <SectionHeader title="Agent usage" />
           {usage ? (
-            <Card className="p-5 grid gap-5">
-              <Stat value={usage.reddit_requests} label="Reddit requests" decimals={0} />
-              <Stat value={usage.llm_calls} label="LLM calls" decimals={0} />
-              <Stat value={usage.llm_tokens} label="LLM tokens" decimals={0} />
-              <Stat value={usage.embed_calls} label="Embedding batches" decimals={0} />
-              <Stat value={usage.paid_usd} label="Paid via x402" prefix="$" decimals={3} />
+            <Card className="p-5">
+              <div className="grid gap-5">
+                <Stat value={usage.paid_usd} label="Spent so far" prefix="$" decimals={3} />
+                <Stat
+                  value={usage.reddit_requests}
+                  label="Discussions fetched"
+                  decimals={0}
+                />
+              </div>
+              <details className="mt-5 pt-4 border-t border-hairline">
+                <summary className="text-[13px] text-ink-subtle cursor-pointer hover:text-ink-muted transition-colors">
+                  Technical counters
+                </summary>
+                <div className="grid gap-3 mt-3">
+                  {[
+                    ["Model calls", usage.llm_calls],
+                    ["Model tokens", usage.llm_tokens],
+                    ["Embedding batches", usage.embed_calls],
+                  ].map(([label, value]) => (
+                    <div key={String(label)} className="flex items-baseline justify-between gap-3">
+                      <span className="text-[13px] text-ink-muted">{label}</span>
+                      <span className="tnum text-[13px] text-ink">
+                        {Number(value).toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </details>
             </Card>
           ) : (
             <Card className="p-5 text-sm text-ink-subtle">Usage unavailable.</Card>

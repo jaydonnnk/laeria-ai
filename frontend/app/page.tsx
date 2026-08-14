@@ -427,7 +427,10 @@ export default function Landing() {
               would reach after a week of lurking. Then, if you want it to, it
               buys the pick under a spending mandate.
             </p>
-            <div className="hero-cta mt-8 flex items-center gap-3">
+            {/* flex-wrap: at 375px the button and the secondary link together
+                exceed the screen, and without wrapping one of them is pushed
+                off the edge. */}
+            <div className="hero-cta mt-8 flex flex-wrap items-center gap-x-4 gap-y-3">
               <Link
                 href={gate("/decision")}
                 className="inline-flex items-center gap-2 whitespace-nowrap bg-accent text-accent-ink font-medium text-sm px-5 py-2.5 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-xs"
@@ -435,11 +438,14 @@ export default function Landing() {
                 Ask what&apos;s worth it
                 <span aria-hidden>→</span>
               </Link>
+              {/* Quieter on purpose: a second button-sized target beside the
+                  primary one split attention at the exact moment the page is
+                  asking for a single click. */}
               <Link
                 href={gate("/research")}
-                className="text-sm text-ink-muted hover:text-ink transition-colors px-3 py-2.5"
+                className="text-[13px] text-ink-subtle hover:text-ink transition-colors underline underline-offset-4 decoration-hairline-strong"
               >
-                See how it went for other people
+                or see how it went for other people
               </Link>
             </div>
           </div>
@@ -514,9 +520,17 @@ export default function Landing() {
 
           <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-10 items-start">
             {/* raw signal */}
+            {/* opacity-40 is the starting state of a thread that has not been
+                read yet. At 25% the lower rows all but vanished on a
+                projector, so the section looked like it held three threads
+                rather than four waiting. 40% still reads as clearly "not yet
+                done" against the resolved row at 100%, while staying legible
+                enough to show there is more evidence queued up. GSAP animates
+                each row to 1 from whatever this value is, so the timing is
+                untouched. */}
             <div className="grid gap-3">
               {MINED.map((m) => (
-                <div key={m.t} className="mine-row opacity-25 flex gap-4">
+                <div key={m.t} className="mine-row opacity-40 flex gap-4">
                   <div className="relative w-px bg-hairline shrink-0">
                     <div className="mine-rule absolute inset-0 bg-accent origin-top" />
                   </div>
@@ -572,14 +586,29 @@ export default function Landing() {
               {/* skeleton and verdict share one grid cell, so the card is
                   sized by the taller of the two and never jumps or clips */}
               <div className="pt-5 grid">
-                <div className="mine-skeleton [grid-area:1/1] grid gap-2.5 content-start">
-                  {["92%", "78%", "86%", "54%", "70%", "40%"].map((w, i) => (
-                    <div
-                      key={i}
-                      className={`h-3 rounded-full ${i === 3 ? "mt-3" : ""} bg-surface-2`}
-                      style={{ width: w }}
-                    />
-                  ))}
+                {/* The waiting state needs to read as "working", not as a card
+                    that failed to load. The placeholder bars alone were
+                    surface-2 on white — about a 3% difference, invisible on a
+                    projector — so the panel looked blank for the first few
+                    scroll stages. A label says what is happening; the bars are
+                    now hairline, which is visibly grey without becoming loud.
+                    Both live inside .mine-skeleton, so they fade out together
+                    on the existing timeline with no change to it. */}
+                <div className="mine-skeleton [grid-area:1/1]">
+                  <div className="eyebrow mb-1.5">Reading the signal…</div>
+                  <p className="text-[13px] leading-snug text-ink-muted mb-5 max-w-[26rem]">
+                    Comparing repeated praise, complaints and long-term
+                    experiences.
+                  </p>
+                  <div className="grid gap-2.5">
+                    {["92%", "78%", "86%", "54%", "70%", "40%"].map((w, i) => (
+                      <div
+                        key={i}
+                        className={`h-3 rounded-full ${i === 3 ? "mt-3" : ""} bg-hairline`}
+                        style={{ width: w }}
+                      />
+                    ))}
+                  </div>
                 </div>
 
                 <div className="verdict [grid-area:1/1] opacity-0">
@@ -751,10 +780,10 @@ export default function Landing() {
         <h2 className="text-[clamp(2.2rem,5vw,3.6rem)] font-semibold tracking-[-0.02em] mb-8">
           What are you about to commit to?
         </h2>
-        <div className="flex items-center justify-center gap-3">
+        <div className="flex flex-wrap items-center justify-center gap-3">
           <Link
             href={gate("/decision")}
-            className="inline-flex items-center gap-2 bg-accent text-accent-ink font-medium px-6 py-3 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 whitespace-nowrap bg-accent text-accent-ink font-medium px-6 py-3 rounded-[--radius] hover:bg-accent-hover transition-colors shadow-sm"
           >
             Ask what's worth it <span aria-hidden>→</span>
           </Link>
@@ -762,12 +791,14 @@ export default function Landing() {
             Sign in
           </Link>
         </div>
-        <div className="mt-16 pt-8 border-t border-hairline flex items-center justify-between text-ink-subtle">
+        {/* Wraps and centres on a phone: the wordmark plus the tagline are
+            wider than a 375px screen side by side. */}
+        <div className="mt-16 pt-8 border-t border-hairline flex flex-wrap items-center justify-center sm:justify-between gap-3 text-ink-subtle">
           <span className="font-mono text-sm">
             laeria<span className="text-accent">.</span>
           </span>
           <span className="font-mono text-[11px] tracking-wide uppercase">
-            Reddit decision research · agentic checkout · demo
+            Reddit decision research · agentic checkout
           </span>
         </div>
       </section>

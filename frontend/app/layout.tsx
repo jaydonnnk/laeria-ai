@@ -17,10 +17,14 @@ const plexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
+// Leads with the research story, because that is what the product is and what
+// every page except one is about. The previous title described the payment
+// rail — the payoff, not the pitch — so a shared link or a row of browser
+// tabs advertised the wrong product.
 export const metadata: Metadata = {
-  title: "laeria — agentic payments under a mandate",
+  title: "laeria — what's actually worth buying, according to real discussions",
   description:
-    "An AI agent that funds, discovers, issues a disposable card, and checks out — every step bounded by a spending mandate.",
+    "An AI agent that reads the communities who actually own the thing, returns an honest verdict with the evidence behind it, and shows how confident it is and why. When the consensus is strong it can buy the pick under a spending limit it can prove it obeyed.",
 };
 
 export default function RootLayout({

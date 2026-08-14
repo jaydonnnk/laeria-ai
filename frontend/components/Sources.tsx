@@ -12,17 +12,20 @@ export function Sources({ sources }: { sources: SourceThread[] }) {
             <span className="tnum text-ink-subtle shrink-0">
               {String(i + 1).padStart(2, "0")}
             </span>
-            <span>
+            {/* Title and details on separate lines: run together they wrapped
+                into a ragged block on a phone, and long thread titles pushed
+                the row wider than the screen. */}
+            <span className="min-w-0">
               <a
                 href={s.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-info hover:underline"
+                className="text-info hover:underline break-words"
               >
                 {s.title || s.url}
               </a>
-              <span className="text-ink-subtle">
-                {" "}— r/{s.subreddit} · <span className="tnum">{s.score}</span> pts ·{" "}
+              <span className="block text-ink-subtle text-[13px] mt-0.5">
+                r/{s.subreddit} · <span className="tnum">{s.score}</span> pts ·{" "}
                 <span className="tnum">{s.num_comments}</span> comments
               </span>
             </span>

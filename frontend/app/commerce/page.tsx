@@ -9,6 +9,7 @@ import { Stat } from "../../components/ui/Stat";
 import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
 import { Stepper, Step, StepState } from "../../components/commerce/Stepper";
+import { ResearchHandoff } from "../../components/commerce/ResearchHandoff";
 import { shake } from "../../lib/motion";
 import {
   api,
@@ -38,6 +39,13 @@ export default function CommercePage() {
   const [info, setInfo] = useState<string | null>(null);
   const [handedPick, setHandedPick] = useState<string | null>(null);
   const [autoNote, setAutoNote] = useState<string | null>(null);
+  // Display-only mirror of the handoff: whether this arrival was an automatic
+  // buy, and which product the agent settled on. Populated alongside the
+  // existing flow — it changes nothing about what is searched or bought.
+  const [handoffAuto, setHandoffAuto] = useState(false);
+  const [handoffProduct, setHandoffProduct] = useState<
+    { title: string; price: number } | null
+  >(null);
 
   // lifecycle state — lifted so the stepper reflects the whole flow
   const [agentFunded, setAgentFunded] = useState(false);
@@ -100,6 +108,7 @@ export default function CommercePage() {
     const auto = params.get("auto") === "1";
     setQ(handed);
     setHandedPick(handed);
+    setHandoffAuto(auto);
     (async () => {
       const res = await runSearch(handed);
       if (!auto) return;
@@ -108,6 +117,7 @@ export default function CommercePage() {
         setAutoNote("No available product matched the pick — search manually below.");
         return;
       }
+      setHandoffProduct({ title: best.title, price: best.price_usd });
       setAutoNote(
         `Agent selected “${best.title}” ($${best.price_usd.toFixed(2)}) and proposed the purchase.`
       );
@@ -195,9 +205,9 @@ export default function CommercePage() {
   return (
     <main className="max-w-[1100px] mx-auto px-6 py-10 md:py-14">
       <div className="mb-8">
-        <div className="eyebrow mb-3">Agentic checkout</div>
+        <div className="eyebrow mb-3">From research to purchase</div>
         <h1 className="text-2xl md:text-[2rem] font-semibold tracking-[-0.02em]">
-          The lifecycle console
+          Agent checkout
         </h1>
         <p className="mt-3 text-ink-muted max-w-[44rem]">
           Fund the agent, let it discover and verify a product, watch it mint a
@@ -208,6 +218,29 @@ export default function CommercePage() {
 
       {error && <Banner tone="error" className="mb-3">{error}</Banner>}
       {info && <Banner tone="success" className="mb-3">{info}</Banner>}
+
+      {/* Arriving from "Worth it?" — say so before anything else, so the buy
+          reads as the next step of the research rather than a new errand. */}
+      {handedPick && (
+        <ResearchHandoff
+          pick={handedPick}
+          // Ordered so the first paint is never wrong: `searching` is still
+          // false for one render before the effect starts the search, which
+          // would briefly flash "nothing matched". A product, then a note,
+          // then searching — anything else means it is still working.
+          status={
+            !handoffAuto
+              ? "browsing"
+              : handoffProduct
+                ? "selected"
+                : autoNote
+                  ? "none"
+                  : "searching"
+          }
+          product={handoffProduct}
+          note={autoNote}
+        />
+      )}
 
       <Card className="p-6 mb-10">
         <Stepper steps={steps} />
@@ -220,13 +253,8 @@ export default function CommercePage() {
       {/* ---- Discover ---- */}
       <section className="mb-10">
         <SectionHeader n="02" title="Discover" aside="agent scans the live storefront" />
-        {handedPick && (
-          <Banner tone="info" className="mb-4">
-            Carried over from <b>Worth it?</b> — searching the store for{" "}
-            <span className="font-mono">{handedPick}</span>.
-            {autoNote && <span className="block mt-1">{autoNote}</span>}
-          </Banner>
-        )}
+        {/* The carried-over pick is announced by <ResearchHandoff> at the top
+            of the page now — repeating it here read as two separate events. */}
         {/* The agent path. A plain search box is kept below it as the manual
             fallback — useful when the model is slow and essential when it is
             unavailable, but it is not the milestone. */}
@@ -331,13 +359,13 @@ function ShopResult({
 
       {pick.found ? (
         <>
-          <div className="flex items-baseline justify-between gap-4 mb-1">
-            <h3 className="font-semibold">{pick.title}</h3>
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <h3 className="font-semibold break-words min-w-0">{pick.title}</h3>
             <span className="tnum font-semibold shrink-0">
               {pick.price_usd.toFixed(2)}
             </span>
           </div>
-          <p className="text-sm text-ink-muted mb-4">{pick.reason}</p>
+          <p className="text-sm text-ink-muted mb-4 break-words">{pick.reason}</p>
           <Button onClick={() => onBuy(pick)} disabled={buying}>
             {buying ? "Proposing…" : "Buy this"}
           </Button>
@@ -393,32 +421,39 @@ function ProductRow({
   const match = v && v.price_usd === p.price_usd;
   return (
     <Card interactive className="p-5">
-      <div className="flex gap-4">
+      {/* Smaller thumbnail on a phone: an 80px image left barely 60px for the
+          product name, which wrapped one or two words per line. */}
+      <div className="flex gap-3 sm:gap-4">
         {p.image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={p.image}
             alt={p.title}
-            className="w-20 h-20 rounded-[--radius] object-cover border border-hairline shrink-0"
+            className="w-14 h-14 sm:w-20 sm:h-20 rounded-[--radius] object-cover border border-hairline shrink-0"
           />
         ) : (
-          <div className="w-20 h-20 rounded-[--radius] bg-surface-2 border border-hairline shrink-0" />
+          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-[--radius] bg-surface-2 border border-hairline shrink-0" />
         )}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="font-semibold text-ink">{p.title}</div>
-              <div className="text-sm text-ink-subtle mt-0.5">
+          <div className="flex items-start justify-between gap-3">
+            {/* min-w-0 lets a long product title wrap instead of shoving the
+                price out of the card. */}
+            <div className="min-w-0">
+              <div className="font-semibold text-ink break-words">{p.title}</div>
+              <div className="text-sm text-ink-subtle mt-0.5 break-words">
                 {p.vendor}
                 {p.product_type ? ` · ${p.product_type}` : ""}
               </div>
             </div>
-            <div className="tnum text-lg text-ink whitespace-nowrap">
+            <div className="tnum text-lg text-ink whitespace-nowrap shrink-0 text-right">
               ${p.price_usd.toFixed(2)}
-              {!p.available && <span className="ml-2 text-xs text-danger">sold out</span>}
+              {!p.available && (
+                <span className="block text-xs text-danger">sold out</span>
+              )}
             </div>
           </div>
-          <div className="flex items-center gap-2 mt-4">
+          {/* flex-wrap: three controls plus a link do not fit one phone row. */}
+          <div className="flex flex-wrap items-center gap-2 mt-4">
             <Button variant="secondary" size="sm" onClick={onVerify} disabled={busy}>
               {verifying ? "Scanning page…" : "Verify with agent"}
             </Button>
@@ -585,14 +620,16 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
           );
         })}
       </div>
-      <form onSubmit={fund} className="flex items-end gap-3">
+      {/* flex-wrap: the 190px amount field plus the button overflow a 375px
+          screen side by side. */}
+      <form onSubmit={fund} className="flex flex-wrap items-end gap-3">
         {/* Denominated in the token, not in dollars. The amount is a token
             quantity — labelling it USD and prefixing "$" was harmless while
             the token was USDC and is simply wrong on an SGD-pegged one, on
             the exact screen where a judge is checking that we know what asset
             we are moving. */}
         <Field label={`Amount (${symbol})`}>
-          <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden w-[190px]">
+          <div className="flex items-center bg-surface border border-hairline-strong rounded-[--radius] overflow-hidden w-full sm:w-[190px]">
             <span className="px-3 text-ink-subtle text-xs border-r border-hairline whitespace-nowrap">
               {symbol}
             </span>
@@ -810,12 +847,16 @@ function ExecutionLog({ onExecuted }: { onExecuted: (n: number) => void }) {
               className={refused ? "p-4 border-danger/30" : "p-4"}
             >
               <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-2.5 flex-wrap">
+                <div className="flex items-center gap-x-2.5 gap-y-1.5 flex-wrap min-w-0">
                   <Badge tone={EXEC_TONE[a.status] ?? "neutral"}>{a.status.replace("_", " ")}</Badge>
                   <span className="tnum text-sm text-ink">${a.amount_usd.toFixed(2)}</span>
-                  <span className="text-sm text-ink-muted">{String(a.metadata?.description ?? "")}</span>
+                  {/* Descriptions run to 200 characters, so this has to wrap
+                      inside the row rather than stretch it. */}
+                  <span className="text-sm text-ink-muted break-words min-w-0">
+                    {String(a.metadata?.description ?? "")}
+                  </span>
                 </div>
-                <span className="tnum text-xs text-ink-subtle whitespace-nowrap">
+                <span className="tnum text-xs text-ink-subtle whitespace-nowrap shrink-0">
                   {new Date(a.created_at).toLocaleString()}
                 </span>
               </div>
@@ -830,12 +871,12 @@ function ExecutionLog({ onExecuted }: { onExecuted: (n: number) => void }) {
                 </div>
               )}
               {refused && (
-                <p className="mt-2 text-[13px] text-danger">
+                <p className="mt-2 text-[13px] text-danger break-words">
                   refused: {String(a.metadata?.mandate_violation)}
                 </p>
               )}
               {typeof a.metadata?.error === "string" && (
-                <p className="mt-2 text-[13px] text-danger">{a.metadata.error}</p>
+                <p className="mt-2 text-[13px] text-danger break-words">{a.metadata.error}</p>
               )}
               {Array.isArray(a.metadata?.checkout_screenshots) &&
                 (a.metadata.checkout_screenshots as string[]).length > 0 &&

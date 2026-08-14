@@ -31,16 +31,21 @@ export function Stepper({ steps }: { steps: Step[] }) {
                 />
               )}
             </div>
-            <div className="pr-4">
+            <div className="pr-2 sm:pr-4">
               <div
                 className={cn(
-                  "text-sm font-semibold transition-colors",
+                  "text-[13px] sm:text-sm font-semibold transition-colors",
                   step.state === "todo" ? "text-ink-subtle" : "text-ink"
                 )}
               >
                 {step.label}
               </div>
-              <div className="text-xs text-ink-muted mt-0.5">{step.caption}</div>
+              {/* The caption is the first thing to go on a narrow screen:
+                  four of them across a phone wrapped into unreadable columns,
+                  and the step names alone still tell the story. */}
+              <div className="hidden sm:block text-xs text-ink-muted mt-0.5">
+                {step.caption}
+              </div>
             </div>
           </li>
         );
