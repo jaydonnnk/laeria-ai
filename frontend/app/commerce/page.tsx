@@ -9,6 +9,7 @@ import { Stat } from "../../components/ui/Stat";
 import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
 import { Stepper, Step, StepState } from "../../components/commerce/Stepper";
+import { WalletConnect } from "../../components/commerce/WalletConnect";
 import { shake } from "../../lib/motion";
 import {
   api,
@@ -555,12 +556,18 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
       <SectionHeader n="01" title="Fund" aside={balances?.network ?? "…"} />
       {err && <SectionNotice message={err} onRetry={refresh} />}
       <p className="text-sm text-ink-muted max-w-[46rem] mb-4">
-        The <b>agent</b> wallet is this account&apos;s own — generated and
-        seeded from the shared <b>treasury</b> faucet on your first visit. Top
-        it up below; only this wallet&apos;s balance backs your cards and
-        settles your purchases.
+        Connect your own wallet (non-custodial, recommended) and approve a
+        spending cap for the agent — you keep the keys. The custodial testnet
+        wallet below stays as a fallback.
       </p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+
+      <WalletConnect onChange={refresh} />
+
+      <details className="mb-4">
+        <summary className="text-sm text-ink-subtle cursor-pointer mb-2">
+          Custodial testnet wallet (fallback)
+        </summary>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         {(["agent", "treasury"] as const).map((role) => {
           const party = balances?.[role];
           return (
@@ -615,6 +622,7 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
         </Button>
       </form>
       {fundMsg && <p className="text-sm text-success mt-3">{fundMsg}</p>}
+      </details>
     </section>
   );
 }

@@ -293,6 +293,16 @@ export const api = {
       body: JSON.stringify({ amount_usd }),
     }),
 
+  // Non-custodial: the user connects their own wallet, approves the operator,
+  // and the agent spends via transferFrom within that allowance.
+  walletConnect: (address: string) =>
+    request<{ address: string; custodial: boolean }>("/wallet/connect", {
+      method: "POST",
+      body: JSON.stringify({ address }),
+    }),
+  walletOperator: () => request<WalletOperator>("/wallet/operator"),
+  walletAllowance: () => request<WalletAllowance>("/wallet/allowance"),
+
   // Audit-trail screenshots need the auth header, so <img src> can't load
   // them directly — fetch as a blob and hand back an object URL.
   screenshotUrl: async (category: "store" | "checkout", path: string) => {
@@ -336,6 +346,26 @@ export interface FundResult {
   from: string;
   to: string;
   network: string;
+}
+
+// Everything the frontend needs to build the ERC-20 approve(operator, cap) tx.
+export interface WalletOperator {
+  operator_address: string;
+  token_contract: string;
+  token_symbol: string;
+  token_decimals: number;
+  chain_id: number;
+  network: string;
+  network_id: string;
+}
+
+export interface WalletAllowance {
+  address: string;
+  custodial: boolean;
+  operator_address: string;
+  token_symbol: string;
+  balance: number;
+  allowance: number;
 }
 
 // Mirrors backend cards table rows (no PAN/CVC — live-fetched only).
