@@ -118,13 +118,16 @@ class SignalQuality(BaseModel):
     # synthesised. This is the honest answer to "where did this come from".
     subreddits_represented: list[str] = Field(default_factory=list)
 
-    # Threads fed to synthesis after filtering and duplicate collapsing.
+    # Threads fed to synthesis after relevance screening, filtering and
+    # duplicate collapsing — the authoritative evidence set. Every other count
+    # on this object is measured over the same set.
     usable_thread_count: int = 0
     # Deprecated alias for `usable_thread_count`, always the same value.
     # Retained because existing clients read it; new code should not.
     thread_count: int = 0
-    # Of the unique fetched threads, how many cleared score >= 10 AND
-    # comments >= 3 — the bar in RedditService.apply_signal_filters.
+    # Of the threads counted above, how many cleared score >= 10 AND
+    # comments >= 3 — the bar in RedditService.apply_signal_filters. Measured
+    # over the same set as `usable_thread_count`, so it can never exceed it.
     strong_thread_count: int = 0
     # True when `strong_thread_count` fell below the threshold for relying on
     # strong evidence alone, so the broader selection branch was used. Does
@@ -141,6 +144,19 @@ class SignalQuality(BaseModel):
     duplicate_threads_collapsed: int = 0
     # False means the duplicate detector could not run, not that it ran clean.
     similarity_analysis_available: bool = False
+
+    # Whether retrieved threads were screened for relevance to the question
+    # before any of them was read. False means the screen could not run, NOT
+    # that everything retrieved was relevant.
+    relevance_screened: bool = False
+    # Search hits dropped as clearly about something else, before any thread
+    # was fetched. These never entered any count above.
+    off_topic_candidates_rejected: int = 0
+    # Model-authored statements about the SHAPE of this evidence that
+    # contradicted the authoritative set and were therefore not displayed.
+    # Reported rather than hidden: a non-zero value here means the synthesis
+    # said something the corpus disproves.
+    unverified_claims_removed: int = 0
 
     evidence_state: EvidenceState = EvidenceState.OK
     date_range: str = ""

@@ -145,12 +145,21 @@ export interface SignalQuality {
   usable_thread_count: number;
   /** Deprecated alias for usable_thread_count; do not use in new code. */
   thread_count: number;
-  /** Threads that cleared score >= 10 AND comments >= 3. */
+  /** Of the threads counted above, how many cleared score >= 10 AND comments
+   *  >= 3. Measured over the same set, so it never exceeds them. */
   strong_thread_count: number;
   filters_relaxed: boolean;
   coordinated_posting_suspected: boolean;
   duplicate_threads_collapsed: number;
   similarity_analysis_available: boolean;
+  /** Whether retrieved threads were screened for relevance to the question.
+   *  False means the screen could not run, not that all were relevant. */
+  relevance_screened: boolean;
+  /** Search hits dropped as clearly off-topic before anything was read. */
+  off_topic_candidates_rejected: number;
+  /** Model-authored claims about the evidence structure that contradicted the
+   *  authoritative evidence set and were therefore not displayed. */
+  unverified_claims_removed: number;
   evidence_state: EvidenceState;
   date_range: string;
   bias_notes: string;

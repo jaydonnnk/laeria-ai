@@ -15,121 +15,15 @@ from __future__ import annotations
 import pytest
 
 from agents.research_agent import NoRecordedPlan, ResearchAgent
-from core.models import ConfidenceLevel, EvidenceState, RedditThread
+from core.models import ConfidenceLevel, EvidenceState
+from tests.fakes import FakeLLM as _FakeLLM
+from tests.fakes import FakeReddit as _FakeReddit
+from tests.fakes import FetchAlwaysFails as _FetchAlwaysFails
+from tests.fakes import thread as _thread
 
 HIGH = ConfidenceLevel.HIGH
 MODERATE = ConfidenceLevel.MODERATE
 LOW = ConfidenceLevel.LOW
-
-
-def _thread(tid: str, sub: str, score: int = 100, comments: int = 40) -> RedditThread:
-    """A thread that clears the strong-evidence bar (score >= 10, comments >= 3)."""
-    return RedditThread(
-        id=tid,
-        subreddit=sub,
-        title=f"thread {tid}",
-        body=f"body of {tid}",
-        url=f"https://old.reddit.com/comments/{tid}/",
-        score=score,
-        num_comments=comments,
-        created_utc=1_700_000_000.0,
-        author=f"u_{tid}",
-        top_comments=[f"[{score} pts] a comment on {tid}"],
-    )
-
-
-def _strong_corpus() -> list[RedditThread]:
-    """8 threads across 4 communities — nothing here should cap confidence."""
-    subs = ["SteamDeck", "HandheldPC", "patientgamers", "gaming"]
-    return [_thread(f"t{i}", subs[i % 4]) for i in range(8)]
-
-
-class _FakeReddit:
-    """Stands in for RedditService at the seams the agent actually uses."""
-
-    def __init__(
-        self,
-        candidates: list[RedditThread] | None = None,
-        threads: list[RedditThread] | None = None,
-        live_ok: bool = True,
-    ):
-        self._candidates = candidates if candidates is not None else _strong_corpus()
-        self._threads = {t.id: t for t in (threads if threads is not None else self._candidates)}
-        self._live_ok = live_ok
-
-    def search_subreddit(self, sub, query, time_filter="year", limit=25):
-        return [t for t in self._candidates if t.subreddit == sub]
-
-    def get_thread_with_comments(self, thread_id, max_comments=15):
-        return self._threads[thread_id]
-
-    def probe_live(self):
-        return (self._live_ok, "reachable" if self._live_ok else "HTTP 403 — blocked")
-
-    def apply_signal_filters(self, threads, min_score=10, min_comments=3):
-        # The real implementation — imported rather than reimplemented, so
-        # these tests exercise the genuine relaxation decision.
-        from services.reddit import RedditService
-
-        return RedditService.apply_signal_filters(self, threads, min_score, min_comments)
-
-
-class _FetchAlwaysFails(_FakeReddit):
-    """Search returns candidates; every full-thread fetch dies.
-
-    The real production route to an empty synthesis corpus: `_fetch_threads`
-    drops failures with a warning, so the corpus arrives empty even though
-    search found plenty.
-    """
-
-    def get_thread_with_comments(self, thread_id, max_comments=15):
-        raise RuntimeError("thread fetch failed")
-
-
-class _FakeLLM:
-    """Scripted planner and synthesis. Embeddings succeed unless told not to."""
-
-    def __init__(
-        self,
-        subreddits: list[str] | None = None,
-        confidence: str = "high",
-        consensus_pick: str = "The Steam Deck OLED, for its screen and battery.",
-        embed_fails: bool = False,
-        drop_half: str | None = None,
-    ):
-        self._subreddits = subreddits or ["SteamDeck", "HandheldPC", "patientgamers", "gaming"]
-        self._confidence = confidence
-        self._pick = consensus_pick
-        self._embed_fails = embed_fails
-        self._drop_half = drop_half
-        self.worst_case_seconds = 1
-
-    def complete_json(self, system: str, user: str, max_tokens: int = 0, **kw) -> dict:
-        if "identify which subreddits" in system:
-            return {"subreddits": self._subreddits, "search_queries": ["q1", "q2"]}
-        if "audit Reddit discussions" in system:          # scrutiny half
-            if self._drop_half == "scrutiny":
-                raise RuntimeError("scrutiny half unavailable")
-            return {
-                "failure_modes": ["fan noise"],
-                "what_reviewers_miss": ["case fit"],
-                "red_flags": [],
-                "confidence": self._confidence,
-                "bias_notes": "enthusiast-skewed sample",
-            }
-        if self._drop_half == "verdict":                   # verdict half
-            raise RuntimeError("verdict half unavailable")
-        return {
-            "consensus_pick": self._pick,
-            "strengths": ["screen"],
-            "alternatives": ["ROG Ally X"],
-        }
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        if self._embed_fails:
-            raise RuntimeError("embeddings unavailable")
-        # Mutually distant unit vectors: no pair reaches the 0.90 threshold.
-        return [[1.0 if i == j else 0.0 for j in range(len(texts))] for i in range(len(texts))]
 
 
 def _agent(reddit=None, llm=None) -> ResearchAgent:

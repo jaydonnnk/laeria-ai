@@ -24,7 +24,7 @@ English, concatenated into the synthesis prompt, and discarded — the pipeline
 asked the model to "cap confidence accordingly" and had no way to insist. The
 rules below are that same intent, enforced.
 
-Phase A implements six ceiling rules plus one final-verdict rule. Staleness,
+Phase A implements seven ceiling rules plus one final-verdict rule. Staleness,
 contradiction detection and geography handling are deliberately NOT here; see
 docs/SIGNAL_FILTERS.md for what is enforced in code versus what remains a
 prompt-level instruction.
@@ -85,6 +85,9 @@ class EvidenceStats:
     # verdict for this corpus (embeddings failed), NOT that duplicates were
     # found. See RULE 6.
     similarity_analysis_available: bool = False
+    # False means retrieved threads were never screened for relevance to the
+    # question, NOT that everything retrieved was found relevant. See RULE 8.
+    relevance_screened: bool = False
     has_consensus_pick: bool = False
 
 
@@ -207,6 +210,24 @@ def structural_ceiling(stats: EvidenceStats) -> tuple[ConfidenceLevel, list[str]
             ConfidenceLevel.MODERATE,
             "Similarity analysis was unavailable, so independent-source "
             "quality could not be fully verified.",
+        )
+
+    # RULE 8 — evidence nobody checked was even about the question.
+    #
+    # Reddit search is literal keyword matching, so a retrieval set routinely
+    # contains threads that share a word with the query and nothing else. When
+    # the relevance screen runs, those are gone before anything is read and no
+    # rule is needed. When it could NOT run, the corpus may contain them and
+    # every count in this module is measuring an unknown mixture.
+    #
+    # Same shape and same reasoning as RULE 6: not LOW, because a screening
+    # outage says nothing about the threads that ARE relevant, but a check
+    # standing behind a HIGH claim did not execute, so HIGH cannot be claimed.
+    if not stats.relevance_screened:
+        cap(
+            ConfidenceLevel.MODERATE,
+            "Retrieved threads could not be screened for relevance, so this "
+            "corpus may include discussions that do not bear on the question.",
         )
 
     return ceiling, reasons
