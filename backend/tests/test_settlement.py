@@ -86,10 +86,12 @@ def test_settlement_is_signed_by_the_agent_not_the_treasury(monkeypatch):
     assert seen["key"] == AGENT_KEY
 
 
-def test_settlement_without_an_agent_key_is_refused(monkeypatch):
+def test_settlement_without_any_wallet_is_refused(monkeypatch):
+    """No custodial key and no connected address — nothing to settle from."""
     monkeypatch.setenv("X402_AGENT_PRIVATE_KEY", "")
+    monkeypatch.setenv("X402_AGENT_ADDRESS", "")
     get_settings.cache_clear()
-    with pytest.raises(W.WalletError, match="cannot sign"):
+    with pytest.raises(W.WalletError, match="no wallet to settle from"):
         W.WalletService().settle_purchase(10.0)
 
 

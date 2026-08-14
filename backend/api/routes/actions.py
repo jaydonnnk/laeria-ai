@@ -73,28 +73,58 @@ def _stablecoin_backing(required: float) -> float:
     from services.wallet import WalletService
 
     try:
-        balances = WalletService().balances()
-        agent = balances["agent"]
+        svc = WalletService()
+        wallet = svc.resolve_agent_wallet()
+        symbol = svc._net.get("token_symbol") or "tokens"
     except Exception as exc:  # noqa: BLE001
         raise MandateViolation(
-            f"cannot read the agent's stablecoin balance ({exc}) — refusing to "
+            f"cannot resolve the agent wallet ({exc}) — refusing to issue a card "
+            "when nothing is known to back it"
+        ) from exc
+
+    addr = wallet.get("address") or ""
+    if not addr:
+        raise MandateViolation(
+            "no wallet backs this purchase — connect a wallet (or fund the "
+            "custodial one) before the agent can buy"
+        )
+
+    try:
+        balance = svc.token_balance(addr)
+    except Exception as exc:  # noqa: BLE001
+        raise MandateViolation(
+            f"cannot read the wallet's stablecoin balance ({exc}) — refusing to "
             "issue a card when nothing is known to back it"
         ) from exc
 
-    if agent.get("error"):
-        raise MandateViolation(
-            f"cannot read the agent's stablecoin balance: {agent['error']} — "
-            "refusing to issue a card when nothing is known to back it"
-        )
+    # Custodial: the wallet's own balance is the ceiling. Non-custodial: the
+    # agent can spend only what the user APPROVED, so the ceiling is the lesser
+    # of the balance and the remaining allowance — a card can never outrun the
+    # allowance any more than it can outrun the funds.
+    if wallet.get("custodial"):
+        ceiling = balance
+    else:
+        try:
+            allowed = svc.allowance(addr)
+        except Exception as exc:  # noqa: BLE001
+            raise MandateViolation(
+                f"cannot read the agent's spending allowance ({exc}) — refusing "
+                "to issue a card against an unknown allowance"
+            ) from exc
+        if allowed + 1e-9 < required:
+            raise MandateViolation(
+                f"the wallet approved only {allowed:.2f} {symbol} of agent "
+                f"spending but this purchase needs {required:.2f} — approve more "
+                "for the agent before it can buy"
+            )
+        ceiling = min(balance, allowed)
 
-    symbol = balances.get("token_symbol") or "tokens"
-    balance = float(agent.get("token") or 0.0)
-    if balance + 1e-9 < required:
+    if ceiling + 1e-9 < required:
         raise MandateViolation(
-            f"agent wallet holds {balance:.2f} {symbol} but this purchase needs "
-            f"{required:.2f} — fund the agent before it can buy"
+            f"wallet backs {ceiling:.2f} {symbol} but this purchase needs "
+            f"{required:.2f} — fund the wallet before it can buy"
         )
-    return balance
+    return ceiling
 
 
 def _settle_on_chain(amount: float) -> dict:

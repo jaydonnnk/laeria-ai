@@ -111,6 +111,24 @@ class Settings(BaseSettings):
     # keep working unchanged. Flip to False only to force the owner onto a
     # provisioned wallet too.
     owner_uses_env_wallet: bool = True
+
+    # Non-custodial settlement. When a user connects their own wallet (MetaMask)
+    # and signs an ERC-20 approve(operator, cap), the agent settles by calling
+    # transferFrom(user -> merchant), signed by the OPERATOR key — which is the
+    # existing X402_AGENT_PRIVATE_KEY. The operator holds no user funds; it can
+    # only move up to the allowance the user granted. That is what keeps the
+    # user's keys with the user (milestone 1) while the agent still spends.
+    #
+    # The mainnet gate is deliberately separate from wallet._transfer's blanket
+    # testnet-only refusal: direct treasury/agent transfers stay testnet-only,
+    # but a CAPPED, user-approved transferFrom is the one real-money path we
+    # open — and only when this is explicitly True, and only up to the cap.
+    allow_mainnet_settlement: bool = False
+    # Hard ceiling, in token units, on any single on-chain settlement. A
+    # belt-and-suspenders bound on top of the mandate and the allowance, so a
+    # bug in either cannot drain more than this from a connected wallet. Sized
+    # for the $30 demo grant, not production.
+    max_settlement_usd: float = 5.0
     # Comma-separated extra networks to register the signer for, beyond
     # x402_network. See docs/HACKATHON_SWAP.md.
     x402_extra_networks: str = ""

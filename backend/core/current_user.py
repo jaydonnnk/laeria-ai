@@ -42,6 +42,17 @@ def reset_current_user(token) -> None:
     _current_user.reset(token)
 
 
+def bound_user_id() -> str | None:
+    """The user explicitly bound to THIS request, or None outside one.
+
+    Unlike current_user_id(), it does NOT fall back to the owner. Callers that
+    must tell 'in a request, as the owner' apart from 'not in a request at all'
+    — the wallet resolver does, to keep offline callers on the env wallet
+    without touching current_user or the database — need exactly that gap.
+    """
+    return _current_user.get()
+
+
 def current_user_id() -> str:
     """The signed-in user for this request, or the owner outside one."""
     uid = _current_user.get()

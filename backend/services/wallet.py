@@ -71,6 +71,9 @@ _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 _ERC20_BALANCEOF_SELECTOR = "0x70a08231"
 _ERC20_DECIMALS_SELECTOR = "0x313ce567"
 _ERC20_SYMBOL_SELECTOR = "0x95d89b41"
+# Non-custodial spend: the operator moves the user's funds within an allowance.
+_ERC20_TRANSFERFROM_SELECTOR = "0x23b872dd"  # transferFrom(address,address,uint256)
+_ERC20_ALLOWANCE_SELECTOR = "0xdd62ed3e"  # allowance(address owner,address spender)
 
 
 def _decode_abi_string(raw: str) -> str:
@@ -284,6 +287,49 @@ class WalletService:
         to check, not an implementation detail of a transfer."""
         return self._native_balance(addr)
 
+    def token_balance(self, addr: str) -> float:
+        """Token balance of any address. Public because the non-custodial
+        backing check reads a *user's* connected wallet, not the agent's."""
+        if not addr:
+            return 0.0
+        return self._token_balance(addr)
+
+    def operator_address(self) -> str:
+        """Address of the operator/spender the user approves for non-custodial
+        settlement. It is the X402_AGENT key's address — the one that signs
+        transferFrom. Holds no user funds; only spends within the allowance."""
+        key = self._settings.x402_agent_private_key
+        if not key:
+            return ""
+        from eth_account import Account
+
+        return Account.from_key(key).address
+
+    def resolve_agent_wallet(self) -> dict:
+        """Public view of the current user's agent wallet, no key exposed:
+        {address, custodial}. custodial=True means we hold its key and it signs
+        its own transfers; False means a connected wallet the operator spends
+        via the user's allowance. address is "" when neither exists yet."""
+        addr, key = self._resolve_agent()
+        return {"address": addr, "custodial": bool(key)}
+
+    def allowance(self, owner: str) -> float:
+        """How much of `owner`'s token the operator may still spend — the
+        ERC-20 allowance(owner, operator). Zero when either side is unset, and
+        zero is the safe reading: no allowance means the agent cannot spend."""
+        operator = self.operator_address()
+        if not owner or not operator:
+            return 0.0
+        data = (
+            _ERC20_ALLOWANCE_SELECTOR
+            + self._pad_address(owner)
+            + self._pad_address(operator)
+        )
+        result = self._rpc(
+            "eth_call", [{"to": self._net["token"], "data": data}, "latest"]
+        )
+        return int(str(result), 16) / self._units
+
     def _resolve_agent(self) -> tuple[str, str]:
         """(address, private_key) of the agent wallet for THIS request's user.
 
@@ -303,21 +349,32 @@ class WalletService:
             have provisioned first (see ensure_user_wallet).
         """
         s = self._settings
-        if not s.wallet_encryption_key:
+        from core.current_user import bound_user_id, is_owner
+
+        # Outside a request (tests, scripts, the monitor worker) nothing is
+        # bound, and no user is reachable — the env wallet, with no DB touch.
+        if bound_user_id() is None:
             return s.x402_agent_address, s.x402_agent_private_key
 
-        from core.current_user import is_owner
-
-        if is_owner() and s.owner_uses_env_wallet:
+        # The owner keeps the env wallet.
+        if s.owner_uses_env_wallet and is_owner():
             return s.x402_agent_address, s.x402_agent_private_key
 
+        # A bound non-owner uses ONLY their own wallet — never the shared env
+        # one, or two accounts would spend the same funds.
         from db import repositories as repo
 
         wallet = repo.get_user_wallet()
         if not wallet:
             return "", ""
-        key = _decrypt_key(wallet["key_encrypted"]) if wallet["key_encrypted"] else ""
-        return wallet["address"], key
+        enc = wallet.get("key_encrypted") or ""
+        if enc:
+            # Custodial: we hold an encrypted key and sign directly.
+            key = _decrypt_key(enc) if s.wallet_encryption_key else ""
+            return wallet["address"], key
+        # Non-custodial: only an address. The operator spends it via
+        # transferFrom within the allowance the user granted — no key here.
+        return wallet["address"], ""
 
     def balances(self) -> dict:
         s = self._settings
@@ -472,6 +529,82 @@ class WalletService:
             "network": self._net["name"],
         }
 
+    def _transfer_from(
+        self, owner: str, to_address: str, amount: float, nonce: int | None = None
+    ) -> dict:
+        """Move `amount` of the token owner -> to_address using the OPERATOR's
+        allowance. The operator signs; the funds are the user's (`owner`).
+
+        This is the non-custodial settlement path and the ONLY real-money path
+        this module opens. It is gated twice, deliberately more strictly than
+        the blanket testnet-only refusal on `_transfer`:
+
+          * mainnet needs ALLOW_MAINNET_SETTLEMENT explicitly set, AND
+          * the amount must fit under MAX_SETTLEMENT_USD.
+
+        Both are on top of the ERC-20 allowance itself (the chain refuses a
+        transferFrom exceeding what the user approved) and the mandate's human
+        approval upstream. Three independent ceilings, so no single failure
+        moves more of the user's money than intended.
+        """
+        from eth_account import Account
+
+        s = self._settings
+        if not self._net.get("testnet"):
+            if not s.allow_mainnet_settlement:
+                raise WalletError(
+                    f"mainnet settlement is disabled on {self._net['name']} — "
+                    "set ALLOW_MAINNET_SETTLEMENT to move real funds"
+                )
+            if amount > s.max_settlement_usd + 1e-9:
+                raise WalletError(
+                    f"settlement {amount:.2f} exceeds the mainnet cap of "
+                    f"{s.max_settlement_usd:.2f} — refusing"
+                )
+        if amount <= 0:
+            raise WalletError("amount must be positive")
+        operator_key = s.x402_agent_private_key
+        if not operator_key or not owner or not to_address:
+            raise WalletError("operator key / owner / destination not configured")
+
+        units = floor(amount * self._units)
+        if units <= 0:
+            raise WalletError(
+                f"amount {amount} rounds to zero at {self._token_decimals} decimals"
+            )
+        operator = Account.from_key(operator_key)
+
+        if nonce is None:
+            nonce = int(str(self._rpc("eth_getTransactionCount", [operator.address, "pending"])), 16)
+        gas_price = int(str(self._rpc("eth_gasPrice", [])), 16)
+        data = (
+            _ERC20_TRANSFERFROM_SELECTOR
+            + self._pad_address(owner)
+            + self._pad_address(to_address)
+            + hex(units)[2:].rjust(64, "0")
+        )
+        tx = {
+            "chainId": self._net["chain_id"],
+            "nonce": nonce,
+            "to": self._net["token"],
+            "value": 0,
+            "gas": 120_000,  # transferFrom updates an allowance slot too
+            "gasPrice": max(gas_price, 100_000),
+            "data": data,
+        }
+        signed = operator.sign_transaction(tx)
+        tx_hash = str(self._rpc("eth_sendRawTransaction", [signed.raw_transaction.to_0x_hex()]))
+        return {
+            "tx_hash": tx_hash,
+            "explorer_url": self._net["explorer_tx"] + tx_hash,
+            "amount_usd": round(units / self._units, 6),
+            "token_symbol": self._net["token_symbol"],
+            "from": owner,
+            "to": to_address,
+            "operator": operator.address,
+            "network": self._net["name"],
+        }
+
     def fund_agent(self, amount_usd: float) -> dict:
         """Transfer testnet tokens treasury → the current user's agent wallet
         and return the tx hash. The destination is resolved per-user, so the
@@ -504,14 +637,23 @@ class WalletService:
                 "no settlement destination — set MERCHANT_SETTLEMENT_ADDRESS "
                 "(or X402_TREASURY_ADDRESS)"
             )
-        # The agent that pays is the current user's wallet, and it signs with
-        # its own key — settlement moves the buyer's own stablecoin, never a
-        # shared pot.
-        _, agent_key = self._resolve_agent()
-        if not agent_key:
-            raise WalletError("the agent wallet has no signing key — the agent "
-                              "cannot sign its own settlement")
-        out = self._transfer(agent_key, merchant, amount)
+        # Two settlement shapes, decided by whether the user's wallet has a
+        # signing key we hold:
+        #   * custodial (key present) -> the agent signs its own transfer, the
+        #     original per-user-wallet path, testnet-only.
+        #   * non-custodial (address but no key) -> the user connected their own
+        #     wallet and approved the operator, so we move their funds with
+        #     transferFrom; the operator signs, the user keeps custody.
+        agent_addr, agent_key = self._resolve_agent()
+        if agent_key:
+            out = self._transfer(agent_key, merchant, amount)
+        elif agent_addr:
+            out = self._transfer_from(agent_addr, merchant, amount)
+        else:
+            raise WalletError(
+                "no wallet to settle from — the user has neither a custodial "
+                "wallet nor a connected one"
+            )
         logger.info(
             "settled %.2f %s to merchant %s: %s",
             out["amount_usd"], out["token_symbol"], merchant, out["tx_hash"],
