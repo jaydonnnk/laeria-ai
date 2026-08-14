@@ -29,6 +29,22 @@ logger = get_logger(__name__)
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "research"
 
+# Cache kind for Mode 2 briefs, versioned because the SHAPE of a brief changed.
+#
+# Entries written before the structural confidence policy carry a verdict the
+# LLM authored alone, with no ceiling applied and no reasons attached. Served
+# from cache they would bypass the policy entirely and present themselves as
+# calibrated — a stale HIGH that no structural rule ever got to examine, for a
+# full TTL after the upgrade shipped.
+#
+# The kind is part of the cache key, so bumping it makes every pre-upgrade
+# entry a miss and the query recomputes through the new pipeline. Old files are
+# left alone rather than deleted: they simply become unreachable, which is the
+# cheapest correct migration and keeps the change reversible.
+#
+# Bump this whenever the meaning of a stored brief changes again.
+DECISION_CACHE_KIND = "decision-v2"
+
 
 def _key(query: str, context: str, kind: str) -> str:
     """Normalised so trivial rewording still hits: case, surrounding

@@ -13,12 +13,12 @@ Two shapes for each mode:
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
-from agents.research_agent import ResearchAgent
+from agents.research_agent import ResearchAgent, effective_query
 from core.auth import require_owner
 from core.logging import get_logger
-from core.models import OutcomeSummary, ResearchBrief
+from core.models import ConfidenceLevel, OutcomeSummary, ResearchBrief
 
 logger = get_logger(__name__)
 
@@ -40,7 +40,7 @@ class RetrospectiveRequest(BaseModel):
 @router.post("/decision")
 def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
     """Mode 2 — deep multi-subreddit consensus brief. Synchronous."""
-    query = f"{req.query} ({req.context})" if req.context else req.query
+    query = effective_query(req.query, req.context)
     try:
         return ResearchAgent().synthesise_decision(query, thread_budget=req.thread_budget)
     except Exception as exc:  # noqa: BLE001
@@ -49,38 +49,122 @@ def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
 
 
 class ActOnBriefRequest(BaseModel):
-    """Mode 2 trigger: execute a purchase off a research brief."""
+    """Mode 2 trigger: execute a purchase off a research brief.
+
+    Carries only what is needed to IDENTIFY the research run — never its
+    conclusions. Earlier versions accepted `confidence` and `consensus_pick`
+    from the caller, which meant the server's "integrity gate" was reading the
+    verdict from the same client it was supposed to be checking. Both are now
+    read from the stored brief instead.
+
+    Compatibility with a pre-Phase-A client is PARTIAL, and deliberately so:
+
+    * Legacy `confidence` / `consensus_pick` keys are ignored rather than
+      rejected (pydantic's default), so posting them is harmless.
+    * A legacy request for a decision made WITHOUT context still works: the
+      effective query is the bare query, which is what such a client sends.
+    * A legacy request for a CONTEXT-BEARING decision fails closed with 409.
+      The brief was stored under "query (context)" and the old client sends no
+      context, so its authoritative entry cannot be located.
+
+    That last case is a refusal, not a bug. Loosening the lookup to find a
+    brief by query alone would let one question act on another question's
+    research, which is the exact confusion the exact-key lookup exists to
+    prevent. It resolves when the updated frontend sends `context`.
+    """
+
     query: str = Field(min_length=3, max_length=500)
-    consensus_pick: str = Field(min_length=3, max_length=600)
-    confidence: str = Field(pattern="^(high|moderate|low)$")
+    # Required for the lookup: /decision researches "query (context)", so a
+    # context-bearing decision is stored under that composed string and bare
+    # `query` would miss its own brief.
+    context: str = ""
 
 
 @router.post("/act", dependencies=[Depends(require_owner)])
 def act_on_brief(req: ActOnBriefRequest) -> dict:
-    """The plan's core promise: consensus strong -> agent buys. Server-side
-    integrity gate — refuses to act on weak research regardless of what the
-    UI sends. The purchase itself goes through the same mandate/approval
-    pipeline as any other action.
+    """The plan's core promise: consensus strong -> agent buys.
+
+    The confidence and the pick are read from the brief this server computed
+    and stored, never from the request. A caller cannot promote its own
+    research by claiming a level, and cannot redirect the purchase by naming a
+    product the research never recommended — neither value is an input.
+
+    Fails closed: if there is no authoritative brief for this exact query, the
+    answer is "run the research first", not "proceed on the caller's word".
 
     Owner-only despite living on the research router: this is the one research
     endpoint that spends, and it spends from the single shared agent wallet.
+    The purchase itself still goes through the unchanged mandate/approval
+    pipeline — research confidence decides whether to ASK, the mandate decides
+    whether it may happen.
     """
-    if req.confidence == "low":
+    from core.config import get_settings
+    from services import research_cache
+
+    ttl = get_settings().research_cache_seconds
+    if ttl <= 0:
+        # The decision cache doubles as this endpoint's source of authority,
+        # and a non-positive TTL disables reads entirely. Telling the user to
+        # "run the research again" would be advice that cannot work: the brief
+        # would be written and then be unreadable, forever. Name the real
+        # cause instead.
+        #
+        # This coupling is a known limitation, not a design: durable action
+        # authority and optional result caching want to be separate stores.
+        # Out of scope here — see the deferred findings.
+        raise HTTPException(
+            status_code=409,
+            detail="server-side research authority is disabled "
+            "(RESEARCH_CACHE_SECONDS=0), so acting on a stored brief cannot "
+            "work in this configuration — set a positive TTL to enable "
+            "acting on research",
+        )
+
+    query = effective_query(req.query, req.context)
+    cached = research_cache.get(
+        query, kind=research_cache.DECISION_CACHE_KIND, ttl_seconds=ttl
+    )
+    if cached is None:
+        raise HTTPException(
+            status_code=409,
+            detail="no current research brief for this query — run the research "
+            "again, then act on the result",
+        )
+
+    try:
+        brief = ResearchBrief.model_validate(cached)
+    except ValidationError as exc:
+        # An entry that cannot be read as a brief is not an authority.
+        logger.warning("unreadable cached brief for %r: %s", query[:80], exc)
+        raise HTTPException(
+            status_code=409,
+            detail="the stored research brief could not be read — run the "
+            "research again",
+        ) from exc
+
+    if brief.confidence is ConfidenceLevel.LOW:
         raise HTTPException(
             status_code=409,
             detail="refusing to act on low-confidence research — the whole "
             "point is not spending money on weak signal",
         )
+    if not brief.consensus_pick.strip():
+        # Unreachable while the confidence policy forces LOW without a pick,
+        # kept because "buy the nothing it recommended" must never depend on
+        # another module's rule staying the way it is today.
+        raise HTTPException(
+            status_code=409,
+            detail="the research produced no consensus pick to act on",
+        )
 
     from api.routes.actions import ProposeRequest, propose_action
-    from core.config import get_settings
 
     return propose_action(
         ProposeRequest(
             type="purchase",
             target_url=get_settings().action_vendor_url,
             category="research",
-            description=f"[Mode 2] {req.consensus_pick[:200]} (query: {req.query[:120]})",
+            description=f"[Mode 2] {brief.consensus_pick[:200]} (query: {query[:120]})",
         )
     )
 
@@ -143,7 +227,7 @@ class JobAccepted(BaseModel):
 def submit_decision(req: DecisionRequest) -> JobAccepted:
     from services import jobs
 
-    query = f"{req.query} ({req.context})" if req.context else req.query
+    query = effective_query(req.query, req.context)
     job_id = jobs.submit(
         ResearchAgent().synthesise_decision,
         query,

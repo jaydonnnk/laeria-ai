@@ -21,12 +21,20 @@ request per author); it returns when a provider replaces scraping.
 
 Everything here is best-effort: if embeddings fail, research proceeds
 without the analysis rather than dying.
+
+What this module finds is returned as DATA as well as prose. The warnings
+below still go into the synthesis prompt exactly as before — the model needs
+them to write honest `red_flags` — but the counts now also reach
+`agents.confidence`, which can act on them. Prose alone could only ask the
+model to "cap confidence accordingly"; the structured half lets the pipeline
+insist. Both paths are wanted, and neither replaces the other.
 """
 
 from __future__ import annotations
 
 import math
 from collections import Counter
+from dataclasses import dataclass, field
 
 from core.logging import get_logger
 from core.models import RedditThread
@@ -38,6 +46,22 @@ logger = get_logger(__name__)
 _NEAR_DUP = 0.90
 
 
+@dataclass(frozen=True)
+class SignalAnalysisResult:
+    """Structural findings for one corpus: the prose and the counts behind it."""
+
+    threads: list[RedditThread]
+    # Machine-generated warnings for the synthesis prompt. Unchanged in
+    # content and ordering from before this struct existed.
+    warnings: list[str] = field(default_factory=list)
+    collapsed_same_author_count: int = 0
+    cross_author_duplicate_count: int = 0
+    # Whether the duplicate verdict for this corpus can be trusted. False means
+    # the detector could not run (embeddings failed), NOT that it ran and found
+    # nothing — a distinction the confidence policy depends on.
+    similarity_analysis_available: bool = False
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
@@ -47,12 +71,23 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 def analyse_threads(
     threads: list[RedditThread], llm: LLMService | None = None
-) -> tuple[list[RedditThread], list[str]]:
-    """Returns (possibly reduced thread list, machine warnings for the
-    synthesis prompt). Never raises."""
+) -> SignalAnalysisResult:
+    """Structural analysis of a corpus. Never raises.
+
+    Returns the (possibly reduced) thread list, the machine warnings for the
+    synthesis prompt, and the counts behind them.
+    """
     warnings: list[str] = []
     if len(threads) < 2:
-        return threads, _coverage_note(threads)
+        # Nothing to compare, so there is no pair the detector could have
+        # missed: the "no near-duplicates" verdict is trivially correct rather
+        # than unverified, and is reported as available. A corpus this small
+        # is capped at LOW by the thread-count rule regardless.
+        return SignalAnalysisResult(
+            threads=threads,
+            warnings=_coverage_note(threads),
+            similarity_analysis_available=True,
+        )
 
     llm = llm or LLMService()
     try:
@@ -60,11 +95,19 @@ def analyse_threads(
         vectors = llm.embed(texts)
     except Exception as exc:  # noqa: BLE001
         logger.warning("embedding analysis skipped: %s", exc)
-        return threads, _coverage_note(threads)
+        # Research proceeds, but the caller is told the check did not run —
+        # otherwise an embeddings outage would silently look identical to a
+        # corpus that was actually verified as independent.
+        return SignalAnalysisResult(
+            threads=threads,
+            warnings=_coverage_note(threads),
+            similarity_analysis_available=False,
+        )
 
     _persist_embeddings(threads, vectors)
 
     drop: set[str] = set()
+    cross_author_pairs = 0
     for i in range(len(threads)):
         for j in range(i + 1, len(threads)):
             a, b = threads[i], threads[j]
@@ -80,6 +123,7 @@ def analyse_threads(
                 drop.add(loser.id)
                 logger.info("collapsed self-crosspost %s (dup of %s)", loser.id, a.id)
             else:
+                cross_author_pairs += 1
                 warnings.append(
                     f"Threads titled {a.title[:60]!r} (r/{a.subreddit}, u/{a.author}) "
                     f"and {b.title[:60]!r} (r/{b.subreddit}, u/{b.author}) are "
@@ -90,7 +134,13 @@ def analyse_threads(
                 )
 
     kept = [t for t in threads if t.id not in drop]
-    return kept, warnings + _coverage_note(kept)
+    return SignalAnalysisResult(
+        threads=kept,
+        warnings=warnings + _coverage_note(kept),
+        collapsed_same_author_count=len(drop),
+        cross_author_duplicate_count=cross_author_pairs,
+        similarity_analysis_available=True,
+    )
 
 
 def _coverage_note(threads: list[RedditThread]) -> list[str]:

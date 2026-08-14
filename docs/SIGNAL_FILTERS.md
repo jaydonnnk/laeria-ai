@@ -4,6 +4,14 @@ Reddit signal is not uniformly trustworthy. These filters must be applied
 before weighting any post, in all three modes. Build them in Phase 1 — not
 as a later hardening step.
 
+The sections below describe what the synthesis prompt asks the model to do.
+That is a real part of the design — reading sarcasm and judging whether people
+actually agree are semantic questions only a model can answer — but an
+instruction is not an invariant. Where a rule can be checked structurally, it
+is now checked in code as well; see **Deterministic confidence ceilings**
+below for the list, and treat everything above that section as prompt-level
+unless it says otherwise.
+
 ## Account age filter
 Ignore posts from accounts under 6 months old when they make product
 recommendations or warnings. New accounts are disproportionately used for
@@ -32,6 +40,90 @@ multiple posts and multiple accounts before acting on any recommendation.
 ## Sarcasm and context
 Reddit uses heavy sarcasm. Read comment chains, not just top-level posts.
 "Oh yeah, X is great — if you like wasting money" is not positive signal.
+
+---
+
+## Deterministic confidence ceilings
+
+Implemented in `backend/agents/confidence.py`, applied to Mode 2 in
+`ResearchAgent._synthesise`, covered by `backend/tests/test_confidence_policy.py`.
+
+The model still judges whether people agree — that is the semantic question,
+and it produces `semantic_confidence`. Separately, the rules below look only at
+the SHAPE of the evidence and produce a `structural_ceiling`. The verdict is
+the more conservative of the two:
+
+```
+final = min(semantic_confidence, structural_ceiling)
+```
+
+**These rules can only ever lower a verdict.** A clean evidence shape is not
+evidence that the threads agree, so code never promotes a cautious model to
+HIGH; only the model can raise confidence, and only structure can cap it.
+
+No percentages, weights, or scores are produced anywhere in this policy. The
+three bands are the whole vocabulary.
+
+| # | Condition | Ceiling | Where the threshold comes from |
+|---|-----------|---------|-------------------------------|
+| 1 | No usable threads | LOW | Nothing to be confident about |
+| 2 | Exactly one usable thread | LOW | One thread cannot corroborate itself |
+| 3 | Evidence spans fewer than 3 represented communities | MODERATE | The cross-subreddit rule above: "3+ subreddits is high-confidence". Measures spread, **not** independence — see below |
+| 4 | Signal filters had to relax | MODERATE | Reuses the existing 5-strong-thread bar in `apply_signal_filters` — no new number, and the number is not restated in the policy module |
+| 5 | Cross-author near-duplicates detected | MODERATE | The WARP section above |
+| 6 | Similarity analysis could not run | MODERATE | A check that did not execute cannot back a claim |
+| 7 | No consensus pick (final, not a ceiling) | LOW | "High confidence in no recommendation" is incoherent |
+
+Rule 3 counts communities **represented in the final corpus**, not communities
+the planner searched. A subreddit that was read and yielded nothing did not
+corroborate anything.
+
+**Rule 3 measures spread, not independence.** What it counts is distinct
+subreddit names, and names cannot prove that those communities reached their
+view separately — a single claim can be repeated across several subreddits
+from one upstream source, and no count can see that. The rule is therefore
+worded as *"evidence spanning at least 3 communities"* rather than *"3
+independent sources"*, and the code makes no claim to have verified
+independence. Judging whether the substance actually agrees remains the
+model's job; this rule only refuses to call a narrow spread "high".
+
+**Rule 5 is a conservative safety policy, not an accusation.** Near-identical
+text under different accounts has innocent explanations — quoting, reposting, a
+shared source article. The detector does not prove coordination and this
+project does not claim it does; nor does it establish anything about whether
+sources are independent, which this system does not attempt to verify.
+
+What it does establish is narrower, and enough: those items cannot safely be
+counted as *separate supporting evidence*. Because HIGH is intended to require
+stronger corroboration than the other bands, near-duplicate content under
+different authors is sufficient reason to withhold it. Alleging manipulation
+would not be.
+
+**Rule 6 caps rather than floors deliberately.** An embeddings outage says
+nothing about the threads themselves, so downgrading real evidence to LOW over
+an infrastructure failure would be its own dishonesty. But one of the
+structural anti-manipulation checks behind a HIGH claim did not run, so HIGH
+cannot be claimed.
+
+Each rule that fires contributes one plain-language reason to
+`ResearchBrief.confidence_reasons`. Rules that do not fire contribute nothing,
+so the list never contains a clean bill of health — every line names a real
+limitation of that specific corpus.
+
+A brief with no corpus at all carries a reason derived from its
+`evidence_state` instead, because the ceiling rules can only observe that the
+thread count is zero and cannot tell a blocked source from an empty search.
+
+The frontend renders policy reasons verbatim. It separately derives a short
+relationship headline from the typed `semantic_confidence`,
+`structural_ceiling`, `confidence` and `consensus_pick` fields; it never
+infers a structural cause from prose.
+
+**Not yet enforced in code**, and still prompt-level only: staleness/recency
+weighting, contradiction between communities, account age (not obtainable from
+HTML scraping), and sarcasm. Mode 1 (retrospectives) keeps its own separate
+deterministic floor — `thin_coverage` forces LOW below 5 retrospectives — and
+is not covered by the ceiling policy above.
 
 ---
 

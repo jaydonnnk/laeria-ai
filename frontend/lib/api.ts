@@ -118,14 +118,45 @@ export interface SourceThread {
   num_comments: number;
 }
 
-// Mirrors backend core/models.py ResearchBrief.
+// Mirrors backend core/models.py ConfidenceLevel.
+export type ConfidenceLevel = "high" | "moderate" | "low";
+
+// Mirrors backend core/models.py EvidenceState. WHY a brief looks the way it
+// does, kept separate from how confident it is: "the community disagrees",
+// "we found nothing" and "Reddit is blocked" are three different answers.
+export type EvidenceState =
+  | "ok"
+  | "no_evidence"
+  | "no_usable_evidence"
+  | "source_unavailable"
+  | "not_in_corpus";
+
+// Mirrors backend core/models.py SignalQuality.
+//
+// Every field here is a backend observation. The UI renders these; it does not
+// compute them. Deriving evidence quality client-side would let the page and
+// the API disagree about the same brief, which is how "across r/a, r/b, r/c"
+// came to sit above a source list containing only r/a.
 export interface SignalQuality {
+  /** Communities the planner set out to read — not proof any contributed. */
   subreddits_checked: string[];
+  /** Communities actually present in the synthesised corpus. */
+  subreddits_represented: string[];
+  usable_thread_count: number;
+  /** Deprecated alias for usable_thread_count; do not use in new code. */
   thread_count: number;
+  /** Threads that cleared score >= 10 AND comments >= 3. */
+  strong_thread_count: number;
+  filters_relaxed: boolean;
+  coordinated_posting_suspected: boolean;
+  duplicate_threads_collapsed: number;
+  similarity_analysis_available: boolean;
+  evidence_state: EvidenceState;
   date_range: string;
   bias_notes: string;
 }
 
+// Mirrors backend core/models.py ResearchBrief.
 export interface ResearchBrief {
   consensus_pick: string;
   strengths: string[];
@@ -133,7 +164,14 @@ export interface ResearchBrief {
   what_reviewers_miss: string[];
   alternatives: string[];
   red_flags: string[];
-  confidence: "high" | "moderate" | "low";
+  /** The final verdict: min(semantic, structural ceiling). */
+  confidence: ConfidenceLevel;
+  /** What the model proposed from reading the threads. */
+  semantic_confidence: ConfidenceLevel;
+  /** The most the evidence shape could justify, whatever the model said. */
+  structural_ceiling: ConfidenceLevel;
+  /** Backend-authored reasons; one per policy rule that actually fired. */
+  confidence_reasons: string[];
   signal_quality: SignalQuality;
   sources: SourceThread[];
 }
@@ -149,7 +187,7 @@ export interface OutcomeSummary {
   common_regrets: string[];
   surprising_findings: string[];
   sample_bias: string;
-  confidence: "high" | "moderate" | "low";
+  confidence: ConfidenceLevel;
   thin_coverage: boolean;
   sources: SourceThread[];
 }
@@ -175,8 +213,14 @@ export const api = {
       onProgress
     ),
 
-  // Mode 2 trigger: act on a strong brief
-  actOnBrief: (p: { query: string; consensus_pick: string; confidence: string }) =>
+  // Mode 2 trigger: act on a brief the SERVER already computed.
+  //
+  // Sends only what identifies the research run. The confidence and the pick
+  // are read from the stored brief server-side and are not inputs — a client
+  // cannot promote its own research or redirect the purchase by sending
+  // different values. `context` is required for the lookup because /decision
+  // researches "query (context)".
+  actOnBrief: (p: { query: string; context?: string }) =>
     request<{ action: PayAction; outcome: string }>("/research/act", {
       method: "POST",
       body: JSON.stringify(p),

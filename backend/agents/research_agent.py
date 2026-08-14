@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.logging import get_logger
 from core.models import (
     ConfidenceLevel,
+    EvidenceState,
     OutcomeSummary,
     RedditThread,
     ResearchBrief,
@@ -26,6 +27,20 @@ from services.llm import LLMService
 from services.reddit import RedditService
 
 logger = get_logger(__name__)
+
+
+def effective_query(query: str, context: str = "") -> str:
+    """The exact string a Mode 2 run is keyed on.
+
+    Both the research entry points and `/research/act` must derive this
+    identically or the action path looks up a cache entry that does not exist:
+    a context-bearing decision is researched as "query (context)" and was
+    previously acted on as bare "query", so the authoritative brief could never
+    be found. One helper, one definition.
+    """
+    query = query.strip()
+    context = context.strip()
+    return f"{query} ({context})" if context else query
 
 # How many search hits per subreddit to consider, and how many full threads
 # (with comments) to actually read across all subreddits. Full fetches are the
@@ -233,7 +248,9 @@ class ResearchAgent:
 
         ttl = get_settings().research_cache_seconds
         if use_cache:
-            cached = research_cache.get(query, kind="decision", ttl_seconds=ttl)
+            cached = research_cache.get(
+                query, kind=research_cache.DECISION_CACHE_KIND, ttl_seconds=ttl
+            )
             if cached is not None:
                 return ResearchBrief.model_validate(cached)
         # 1. Identify where to look (LLM) — including 2-3 query phrasings,
@@ -249,7 +266,7 @@ class ResearchAgent:
             plan = self._identify_subreddits(query)
         except NoRecordedPlan as exc:
             logger.warning("no recorded plan for %r", query)
-            return _empty_brief([], str(exc))
+            return _empty_brief([], str(exc), EvidenceState.NOT_IN_CORPUS)
         subreddits = plan["subreddits"][:_MAX_SUBREDDITS]
         search_queries = plan["search_queries"]
         logger.info("research plan: subs=%s queries=%s", subreddits, search_queries)
@@ -307,7 +324,13 @@ class ResearchAgent:
                     "question."
                 )
             )
-            return _empty_brief(subreddits, note)
+            # The two cases need opposite responses from the user (rephrase vs.
+            # nothing they can do), so they are also two different states.
+            return _empty_brief(
+                subreddits,
+                note,
+                EvidenceState.NO_EVIDENCE if live_ok else EvidenceState.SOURCE_UNAVAILABLE,
+            )
 
         # 3. Choose which threads to actually read: engagement-ranked,
         #    spread across subreddits so one sub doesn't dominate.
@@ -317,14 +340,29 @@ class ResearchAgent:
         #    Results are collected in `chosen` order rather than completion
         #    order, so the corpus handed to the LLM stays engagement-ranked.
         full_threads = self._fetch_threads(chosen)
-        filtered = self._reddit.apply_signal_filters(full_threads)
-        if not filtered:
-            return _empty_brief(subreddits, "Threads found but none passed signal filters.")
+        filter_result = self._reddit.apply_signal_filters(full_threads)
+        if not filter_result.threads:
+            # Reaching here does NOT mean the filters rejected everything.
+            # `apply_signal_filters` relaxes until something survives and only
+            # returns empty for empty input, so an empty result means the full
+            # -thread fetches produced nothing — every one of them failed. The
+            # note says what actually happened rather than blaming a stage
+            # that never got the chance to reject anything.
+            return _empty_brief(
+                subreddits,
+                "Search results were found, but no full thread could be "
+                "retrieved for synthesis.",
+                EvidenceState.NO_USABLE_EVIDENCE,
+            )
 
-        # 5. Synthesise (LLM).
-        brief = self._synthesise(query, filtered, subreddits)
+        # 5. Synthesise (LLM), then apply the deterministic confidence ceiling.
+        brief = self._synthesise(query, filter_result, subreddits)
         if use_cache:
-            research_cache.put(query, brief.model_dump(mode="json"), kind="decision")
+            research_cache.put(
+                query,
+                brief.model_dump(mode="json"),
+                kind=research_cache.DECISION_CACHE_KIND,
+            )
         return brief
 
     # ---- internals ----
@@ -389,11 +427,14 @@ class ResearchAgent:
         return plan
 
     def _synthesise(
-        self, query: str, threads: list[RedditThread], subreddits: list[str]
+        self, query: str, filter_result, subreddits: list[str]
     ) -> ResearchBrief:
+        from agents.confidence import EvidenceStats, assess
         from agents.signal_analysis import analyse_threads
 
-        threads, machine_warnings = analyse_threads(threads, self._llm)
+        analysis = analyse_threads(filter_result.threads, self._llm)
+        threads = analysis.threads
+        machine_warnings = analysis.warnings
         corpus = _build_corpus(threads)
         analysis_block = (
             "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
@@ -458,17 +499,54 @@ class ResearchAgent:
 
             date_range = f"{fmt(min(dates))} – {fmt(max(dates))}"
 
+        # The model read the threads and judged whether people agree. That is
+        # where its authority ends: how much confidence this evidence SHAPE is
+        # allowed to earn is decided below, deterministically, and the verdict
+        # is the more conservative of the two. Structure can only ever lower.
+        consensus_pick = raw.get("consensus_pick", "")
+        # Subreddits actually present in the corpus that was synthesised —
+        # not the ones the planner hoped to read. A community that was
+        # searched and yielded nothing did not contribute evidence, and saying
+        # otherwise is contradicted by the source list on the same screen.
+        represented = sorted({t.subreddit for t in threads if t.subreddit})
+        stats = EvidenceStats(
+            usable_thread_count=len(threads),
+            strong_thread_count=filter_result.strong_thread_count,
+            represented_subreddits=tuple(represented),
+            filters_relaxed=filter_result.relaxed,
+            cross_author_duplicate_count=analysis.cross_author_duplicate_count,
+            similarity_analysis_available=analysis.similarity_analysis_available,
+            has_consensus_pick=bool(consensus_pick.strip()),
+        )
+        outcome = assess(_safe_confidence(raw.get("confidence")), stats)
+        logger.info(
+            "confidence: semantic=%s ceiling=%s final=%s (%d reasons)",
+            outcome.semantic.value, outcome.ceiling.value, outcome.final.value,
+            len(outcome.reasons),
+        )
+
         return ResearchBrief(
-            consensus_pick=raw.get("consensus_pick", ""),
+            consensus_pick=consensus_pick,
             strengths=raw.get("strengths", []),
             failure_modes=raw.get("failure_modes", []),
             what_reviewers_miss=raw.get("what_reviewers_miss", []),
             alternatives=raw.get("alternatives", []),
             red_flags=raw.get("red_flags", []),
-            confidence=_safe_confidence(raw.get("confidence")),
+            confidence=outcome.final,
+            semantic_confidence=outcome.semantic,
+            structural_ceiling=outcome.ceiling,
+            confidence_reasons=list(outcome.reasons),
             signal_quality=SignalQuality(
                 subreddits_checked=subreddits,
+                subreddits_represented=represented,
+                usable_thread_count=len(threads),
                 thread_count=len(threads),
+                strong_thread_count=filter_result.strong_thread_count,
+                filters_relaxed=filter_result.relaxed,
+                coordinated_posting_suspected=analysis.cross_author_duplicate_count > 0,
+                duplicate_threads_collapsed=analysis.collapsed_same_author_count,
+                similarity_analysis_available=analysis.similarity_analysis_available,
+                evidence_state=EvidenceState.OK,
                 date_range=date_range,
                 bias_notes=raw.get("bias_notes", ""),
             ),
@@ -562,7 +640,14 @@ class ResearchAgent:
     ) -> OutcomeSummary:
         from agents.signal_analysis import analyse_threads
 
-        threads, machine_warnings = analyse_threads(threads, self._llm)
+        # Mode 1 is unchanged by the Phase A structural work: it reads the
+        # prose half of the analysis exactly as before. Its confidence already
+        # has a deterministic floor of its own (`thin_coverage` in
+        # `mine_retrospectives`), and widening the structural policy to
+        # retrospectives is deliberately out of scope here.
+        analysis = analyse_threads(threads, self._llm)
+        threads = analysis.threads
+        machine_warnings = analysis.warnings
         corpus = _build_corpus(threads)
         analysis_block = (
             "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
@@ -671,12 +756,37 @@ def _safe_confidence(value: object) -> ConfidenceLevel:
         return ConfidenceLevel.LOW
 
 
-def _empty_brief(subreddits: list[str], note: str) -> ResearchBrief:
+def _empty_brief(
+    subreddits: list[str], note: str, state: EvidenceState
+) -> ResearchBrief:
+    """A brief with no evidence behind it.
+
+    `state` is required rather than defaulted: every caller knows exactly why
+    it has nothing, and that reason is the most useful thing it can pass on. A
+    default would let a new no-evidence branch silently inherit someone else's
+    explanation, which is the failure this field exists to end.
+
+    The reason is derived FROM that state rather than written once for all of
+    them. A single generic sentence read as "retrieval and filtering rejected
+    everything", which is untrue of a corpus miss (nothing was retrieved), of
+    an outage (nothing was reachable), and of an empty search (nothing was
+    found) — three of the four branches that land here.
+    """
+    from agents.confidence import evidence_state_reason
+
     return ResearchBrief(
         consensus_pick="",
         confidence=ConfidenceLevel.LOW,
+        semantic_confidence=ConfidenceLevel.LOW,
+        structural_ceiling=ConfidenceLevel.LOW,
+        confidence_reasons=evidence_state_reason(state),
         signal_quality=SignalQuality(
-            subreddits_checked=subreddits, thread_count=0, bias_notes=note
+            subreddits_checked=subreddits,
+            subreddits_represented=[],
+            usable_thread_count=0,
+            thread_count=0,
+            evidence_state=state,
+            bias_notes=note,
         ),
     )
 

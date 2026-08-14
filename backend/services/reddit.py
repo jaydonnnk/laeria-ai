@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 import time
+from dataclasses import dataclass, field
 
 import httpx
 from bs4 import BeautifulSoup
@@ -48,6 +49,29 @@ from core.logging import get_logger
 from core.models import RedditThread
 
 logger = get_logger(__name__)
+
+# How many threads must clear the engagement bar before strong evidence alone
+# is enough. Below this the broader selection branch is used instead — see
+# apply_signal_filters. The confidence policy reuses this same decision rather
+# than second-guessing it with a threshold of its own.
+STRONG_THREAD_TARGET = 5
+
+
+@dataclass(frozen=True)
+class SignalFilterResult:
+    """Filtered corpus plus the shape of the decision that produced it."""
+
+    threads: list[RedditThread] = field(default_factory=list)
+    # How many of the unique threads cleared score >= min_score AND
+    # num_comments >= min_comments, whether or not relaxation then fired.
+    strong_thread_count: int = 0
+    # True when `strong_thread_count` fell below STRONG_THREAD_TARGET and the
+    # broader selection branch was used instead of strong-only filtering.
+    #
+    # This does NOT mean weaker threads exist or were admitted. Four strong
+    # threads and no weak ones still relaxes: the count fell short of the
+    # target, the broader branch ran, and it selected the same four threads.
+    relaxed: bool = False
 
 # old.reddit serves 200 to browser-like clients; a bot-style UA gets 403.
 _BROWSER_UA = (
@@ -431,7 +455,7 @@ class RedditService:
         threads: list[RedditThread],
         min_score: int = 10,
         min_comments: int = 3,
-    ) -> list[RedditThread]:
+    ) -> SignalFilterResult:
         """Signal hygiene (see docs/SIGNAL_FILTERS.md).
 
         HTML-era version: upvote + engagement thresholds, dedupe. Thresholds
@@ -439,6 +463,12 @@ class RedditService:
         labelling beats an empty one. Account-age filtering isn't possible
         without per-author requests; the synthesis prompt carries the
         skepticism instructions instead.
+
+        Filtering behaviour is unchanged. What is new is that the caller is
+        TOLD when the bar had to be lowered: that fact used to live only in a
+        log line, so a brief built entirely from threads which FAILED the
+        quality bar was indistinguishable downstream from one built from
+        threads that cleared it.
         """
         seen: set[str] = set()
         unique = [t for t in threads if not (t.id in seen or seen.add(t.id))]
@@ -446,7 +476,8 @@ class RedditService:
         strong = [
             t for t in unique if t.score >= min_score and t.num_comments >= min_comments
         ]
-        if len(strong) >= 5:
+        relaxed = len(strong) < STRONG_THREAD_TARGET
+        if not relaxed:
             result = strong
         else:
             # Relax: keep anything with real engagement, sorted best-first.
@@ -454,7 +485,11 @@ class RedditService:
             logger.info(
                 "signal filters relaxed: %d strong of %d unique", len(strong), len(unique)
             )
-        return sorted(result, key=lambda t: (t.score, t.num_comments), reverse=True)
+        return SignalFilterResult(
+            threads=sorted(result, key=lambda t: (t.score, t.num_comments), reverse=True),
+            strong_thread_count=len(strong),
+            relaxed=relaxed,
+        )
 
     # ---- Phase 2 ----
 
