@@ -66,32 +66,113 @@ _LEVEL_ORDER = {
 }
 
 
+def _quiet(summary: str) -> dict:
+    """A run that reports nothing.
+
+    `signal_level: none` is what `evaluate` needs to see to raise no alert, and
+    `recommended_action: none` stops an action being proposed. Both are stated
+    rather than left to a default: this shape is returned on every path where
+    the engine declines to judge, and a missing key on one of them would be the
+    bug that matters.
+    """
+    return {
+        "sentiment": "neutral",
+        "signal_level": "none",
+        "summary": summary,
+        "notable_urls": [],
+        "issue_tag": "",
+        "recommended_action": "none",
+    }
+
+
 class AlertEngine:
-    def __init__(self, llm: LLMService | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMService | None = None,
+        guardrails=None,  # noqa: ANN001
+    ) -> None:
+        from services.bedrock_guardrails import get_guardrails
+
         self._llm = llm or LLMService()
+        # Injectable so no test needs AWS. Defaults to the shared instance,
+        # which is a clean no-op unless BEDROCK_GUARDRAILS_ENABLED is set.
+        self._guard = guardrails if guardrails is not None else get_guardrails()
 
     # ---- stage 1: absolute classification of this run ----
 
     def classify_run(self, item_name: str, posts: list[RedditThread]) -> dict:
         """LLM read of this run's posts. Returns the raw_findings dict stored
-        on the run row: sentiment/signal_level/summary/notable_urls/issue_tag."""
+        on the run row: sentiment/signal_level/summary/notable_urls/issue_tag.
+
+        Guarded on both sides. The item name and the post titles are checked
+        before they enter a prompt, the assembled prompt is checked as one
+        string, and the model's answer is checked before it can become
+        findings — because on this path findings become alerts and an alert can
+        carry a recommended action.
+
+        Stage 2 (`evaluate`) is untouched: still pure change-detection logic
+        with no network, no model and no guardrail in it.
+        """
+        from services.bedrock_guardrails import INPUT
+
         if not posts:
-            return {
-                "sentiment": "neutral",
-                "signal_level": "none",
-                "summary": "No recent posts mentioning this item.",
-                "notable_urls": [],
-                "issue_tag": "",
-            }
-        lines = "\n".join(
-            f"{t.id} | r/{t.subreddit} | {t.title[:140]}" for t in posts[:40]
+            return _quiet("No recent posts mentioning this item.")
+
+        # The item name is user-controlled text that enters this prompt on
+        # every run. Checked HERE, at the moment it would reach a model — the
+        # creation-time check in the monitor route is an early rejection, not
+        # the boundary, because rows predating this integration, seeded items
+        # and internal callers never pass through it.
+        item_name = self._guard.ensure_allowed(
+            item_name, INPUT, "monitored item name"
         )
-        raw = self._llm.complete_json(
-            _CLASSIFY_RUN_SYSTEM,
-            f"Monitored item: {item_name}\n\nRecent posts (past week):\n{lines}",
-            max_tokens=800,
+
+        batch = posts[:40]
+        screened = self._guard.screen_batch(
+            [f"{t.id} | r/{t.subreddit} | {t.title[:140]}" for t in batch], INPUT
         )
-        by_id = {t.id: t for t in posts}
+        safe_posts = [batch[i] for i in screened.kept]
+        if screened.dropped:
+            logger.warning(
+                "guardrail excluded %d of %d monitored posts before classification",
+                screened.dropped, len(batch),
+            )
+        if not safe_posts:
+            return _quiet(
+                "Recent posts were found, but the safety layer refused all of "
+                "them, so this check reports no signal."
+            )
+
+        user_msg, safe = self._guard.screen_prompt(
+            f"Monitored item: {item_name}\n\nRecent posts (past week):\n"
+            f"{screened.text}",
+            "monitor classification",
+        )
+        if not safe:
+            return _quiet(
+                "The assembled check was refused by the safety layer, so no "
+                "signal is reported for this run."
+            )
+
+        raw = self._llm.complete_json(_CLASSIFY_RUN_SYSTEM, user_msg, max_tokens=800)
+        # The model's own words, before they can become an alert or an action.
+        # A blocked summary means a QUIET run, not a partial alert: the summary
+        # is what a human reads and what the proposed action is described by.
+        raw, blocked = self._guard.sanitize_model_output(
+            raw, ("summary", "issue_tag"), "monitor classification"
+        )
+        if blocked:
+            logger.warning(
+                "guardrail refused the monitor summary — reporting no signal"
+            )
+            return _quiet(
+                "The safety layer refused this check's summary, so no signal "
+                "is reported for this run."
+            )
+
+        # Built from the SAFE posts only, so a refused post's URL can never be
+        # surfaced as notable evidence.
+        by_id = {t.id: t for t in safe_posts}
         notable_urls = [
             f"https://www.reddit.com/comments/{str(i).removeprefix('t3_')}/"
             for i in raw.get("notable_thread_ids", [])

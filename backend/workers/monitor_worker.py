@@ -40,7 +40,7 @@ def check_item(item_row: dict, reddit=None, engine=None) -> dict:
     name = item_row["name"]
     subreddits = item_row.get("subreddits") or []
     if not subreddits:
-        logger.warning("item %s (%s) has no subreddits; skipping", item_id, name)
+        logger.warning("item %s has no subreddits; skipping", item_id)
         repo.touch_item_checked(item_id)
         return {"run": None, "alert": None}
 
@@ -62,13 +62,19 @@ def check_item(item_row: dict, reddit=None, engine=None) -> dict:
     alert_row = None
     if alert is not None:
         alert_row = repo.create_alert(alert)
-        logger.info("ALERT [%s] %s: %s", alert.severity.value, name, alert.summary)
+        # Item id, not name: the name is user text that the runtime Bedrock
+        # boundary may have refused or masked, and a log must not put back
+        # what the guardrail took out. The summary HAS cleared the output
+        # guardrail before reaching here.
+        logger.info(
+            "ALERT [%s] item %s: %s", alert.severity.value, item_id, alert.summary
+        )
         _notify(name, alert.severity.value, alert.summary)
         _propose_alert_action(alert, alert_row, name)
 
     logger.info(
-        "checked %s: %d posts, signal=%s%s",
-        name, len(posts), findings["signal_level"],
+        "checked item %s: %d posts, signal=%s%s",
+        item_id, len(posts), findings["signal_level"],
         " -> ALERT" if alert_row else "",
     )
     return {"run": run_row, "alert": alert_row}
@@ -108,8 +114,8 @@ def _propose_alert_action(alert, alert_row: dict, item_name: str) -> None:
                 "expires_at": expires_at,
             },
         )
-        logger.info("proposed %s action for %s (pending approval)",
-                    alert.recommended_action.value, item_name)
+        logger.info("proposed %s action for alert %s (pending approval)",
+                    alert.recommended_action.value, alert_row.get("id"))
     except Exception as exc:  # noqa: BLE001
         logger.error("could not propose action for alert: %s", exc)
 
@@ -143,7 +149,10 @@ def run_cycle() -> None:
         try:
             check_item(row, reddit=reddit, engine=engine)
         except Exception as exc:  # noqa: BLE001
-            logger.error("check failed for %s: %s", row.get("name"), exc)
+            # Identified by id, not by name. One way a check fails is the
+            # guardrail refusing the item's name, and copying a name that was
+            # just refused into a log file would undo the refusal.
+            logger.error("check failed for item %s: %s", row.get("id"), exc)
 
 
 def _acquire_singleton_lock():

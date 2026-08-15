@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from dataclasses import dataclass
 
 from core.logging import get_logger
 from core.models import RedditThread
@@ -45,19 +46,48 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb) if na and nb else 0.0
 
 
+@dataclass(frozen=True)
+class SafeThreadText:
+    """Guardrail-sanitized text for one thread, prepared by the caller.
+
+    This module does not know how a thread is rendered for a prompt and does
+    not want to. The caller has already had Bedrock check (and possibly mask)
+    each thread's content, so it hands over the two derived strings this module
+    actually uses: what to embed, and what to call a thread in a warning.
+
+    WHY IT EXISTS: embeddings are sent to a third party BEFORE the synthesis
+    prompt is assembled and masked. Anything that rebuilt its own text from the
+    raw thread here would ship unmasked personal data to the embedding
+    endpoint even though the guardrail had already removed it.
+    """
+
+    title: str
+    embed: str
+
+
 def analyse_threads(
-    threads: list[RedditThread], llm: LLMService | None = None
+    threads: list[RedditThread],
+    llm: LLMService | None = None,
+    safe_text: dict[str, SafeThreadText] | None = None,
 ) -> tuple[list[RedditThread], list[str]]:
     """Returns (possibly reduced thread list, machine warnings for the
-    synthesis prompt). Never raises."""
+    synthesis prompt). Never raises.
+
+    `safe_text` maps thread id to its guardrail-sanitized strings. Absent —
+    guardrails switched off — the raw thread is used and the behaviour is
+    exactly what it was.
+
+    The thread objects themselves are never modified: ids, provenance and the
+    source list shown to the user stay as they were.
+    """
     warnings: list[str] = []
     if len(threads) < 2:
         return threads, _coverage_note(threads)
 
     llm = llm or LLMService()
+    views = [_view(t, safe_text) for t in threads]
     try:
-        texts = [f"{t.title}\n{t.body[:600]}" for t in threads]
-        vectors = llm.embed(texts)
+        vectors = llm.embed([v.embed for v in views])
     except Exception as exc:  # noqa: BLE001
         logger.warning("embedding analysis skipped: %s", exc)
         return threads, _coverage_note(threads)
@@ -80,9 +110,16 @@ def analyse_threads(
                 drop.add(loser.id)
                 logger.info("collapsed self-crosspost %s (dup of %s)", loser.id, a.id)
             else:
+                # Titles come from the sanitized view: this warning is appended
+                # to the same prompt as the corpus and would otherwise be a
+                # second, unmasked copy of the same external text.
+                #
+                # The usernames are gone deliberately. They are personal data
+                # about real people, and the model does not need them: what it
+                # has to know is that the authors DIFFER, not who they are.
                 warnings.append(
-                    f"Threads titled {a.title[:60]!r} (r/{a.subreddit}, u/{a.author}) "
-                    f"and {b.title[:60]!r} (r/{b.subreddit}, u/{b.author}) are "
+                    f"Threads titled {views[i].title[:60]!r} (r/{a.subreddit}) "
+                    f"and {views[j].title[:60]!r} (r/{b.subreddit}) are "
                     f"near-identical content ({sim:.0%} similar) from DIFFERENT "
                     "authors — treat them as ONE source and consider "
                     "coordinated posting; weight any product they push "
@@ -91,6 +128,20 @@ def analyse_threads(
 
     kept = [t for t in threads if t.id not in drop]
     return kept, warnings + _coverage_note(kept)
+
+
+def _view(
+    t: RedditThread, safe_text: dict[str, SafeThreadText] | None
+) -> SafeThreadText:
+    """The sanitized view of a thread, or the raw one when none was prepared.
+
+    The fallback is the pre-guardrail formula, unchanged, so a corpus that was
+    never guarded embeds exactly what it always did.
+    """
+    prepared = (safe_text or {}).get(t.id)
+    if prepared is not None:
+        return prepared
+    return SafeThreadText(title=t.title, embed=f"{t.title}\n{t.body[:600]}")
 
 
 def _coverage_note(threads: list[RedditThread]) -> list[str]:

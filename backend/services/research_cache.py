@@ -52,7 +52,14 @@ def get(query: str, context: str = "", kind: str = "decision", ttl_seconds: int 
     age = time.time() - float(payload.get("cached_at", 0))
     if age > ttl_seconds:
         return None
-    logger.info("research cache hit for %r (age %.0fs)", query[:60], age)
+    # Identified by its own filename — a hash — never by the query.
+    #
+    # The caller looks entries up by the words the user actually typed, which
+    # is the right identity for a cache but the wrong thing to write to a log:
+    # if the safety layer masked an address out of that question, reproducing
+    # it here would put it straight back. The hash is stable, greppable, and
+    # not user-controlled.
+    logger.info("research cache hit %s (age %.0fs)", f.name, age)
     return payload.get("brief")
 
 
