@@ -6,7 +6,15 @@ import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import { Input, Field } from "../ui/Input";
 import { api, CardIssueResult } from "../../lib/api";
-import { signTypedData } from "../../lib/wallet";
+import { signTypedData, ensureChain } from "../../lib/wallet";
+
+// The card's EIP-712 domain names a chain; MetaMask refuses to sign a payload
+// for a chain it isn't on. Switch to it first. Keyed by the chainId the backend
+// puts in typed_data.domain (43113 sandbox / 43114 production).
+const CARD_CHAINS: Record<number, { name: string; rpcUrl: string; explorer: string; nativeSymbol: string }> = {
+  43113: { name: "Avalanche Fuji", rpcUrl: "https://api.avax-test.network/ext/bc/C/rpc", explorer: "https://testnet.snowtrace.io", nativeSymbol: "AVAX" },
+  43114: { name: "Avalanche C-Chain", rpcUrl: "https://api.avax.network/ext/bc/C/rpc", explorer: "https://snowtrace.io", nativeSymbol: "AVAX" },
+};
 
 // Wallet (EIP-1193) errors are plain objects {code, message}, not Error
 // instances — String() on them yields the useless "[object Object]". Pull the
@@ -57,12 +65,24 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
     try {
       setBusy("Preparing…");
       const challenge = await api.cardChallenge(walletAddress, name.trim(), Number(amount));
+      // Switch the wallet to the chain the card's domain names, or MetaMask
+      // rejects the signature ("chainId must match the active chainId").
+      const chainId = Number(
+        (challenge.typed_data as { domain?: { chainId?: number } })?.domain?.chainId
+      );
+      if (chainId) {
+        setBusy(`Switching to ${CARD_CHAINS[chainId]?.name ?? "the card network"}…`);
+        await ensureChain(chainId, CARD_CHAINS[chainId]);
+      }
       setBusy("Waiting for signature…");
       const sig = await signTypedData(walletAddress, challenge.typed_data);
       setBusy("Settling on-chain…");
       const res = await api.cardIssue(challenge, sig);
       setResult(res);
-      setIframe(res.iframe_url ?? null);
+      // Don't auto-render res.iframe_url: it's a ONE-TIME token, and React's
+      // dev StrictMode double-loads the iframe, burning it ("token used"). Let
+      // the user click "view card" to fetch a fresh token on demand.
+      setIframe(null);
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -130,7 +150,7 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
               onClick={refreshView}
               className="text-[12px] font-mono uppercase tracking-wide text-ink-subtle hover:text-ink"
             >
-              {busy ?? "refresh card"}
+              {busy ?? (iframe ? "refresh card" : "view card")}
             </button>
           </div>
           {iframe ? (
@@ -141,7 +161,7 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
             />
           ) : (
             <p className="text-[13px] text-ink-subtle">
-              The card view is one-time — hit <b>refresh card</b> to load it again.
+              Card issued. The view is one-time — hit <b>view card</b> to load it.
             </p>
           )}
           <p className="text-xs text-ink-subtle">
