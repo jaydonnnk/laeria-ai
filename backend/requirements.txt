@@ -28,7 +28,7 @@ requests==2.32.3
 # NOTE: eth-account pulls in bitarray, whose C extension Windows Smart App
 # Control blocks. After ANY venv rebuild, re-copy infra/bitarray_stub/bitarray/
 # over .venv/Lib/site-packages/bitarray/ or wallet signing breaks.
-x402==2.15.0
+x402[evm]==2.15.0
 eth-account==0.13.7
 
 # Card issuance (Stripe Issuing test mode; StraitsX adapter swaps in at event)
