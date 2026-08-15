@@ -333,6 +333,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ card_opaque_id, settlement_tx, wallet_address }),
     }),
+  // Buy a real product with an issued card: reads the card, drives the merchant
+  // checkout, ships to the Profile address. Slow (real browser checkout).
+  cardCheckout: (body: {
+    card_opaque_id: string;
+    settlement_tx: string;
+    wallet_address: string;
+    product_handle: string;
+    variant_id: string;
+    card_amount_sgd: number;
+  }) => request<CardCheckoutResult>("/cards/straitsx/checkout", {
+    method: "POST",
+    body: JSON.stringify(body),
+  }),
 
   // Audit-trail screenshots need the auth header, so <img src> can't load
   // them directly — fetch as a blob and hand back an object URL.
@@ -447,6 +460,16 @@ export interface CardView {
   card_opaque_id: string;
   iframe_url?: string;
   card_html?: string;
+}
+
+export interface CardCheckoutResult {
+  order_reference: string;
+  total_usd: number;
+  gateway_profile: string;
+  pan_shim: boolean;
+  screenshots: string[];
+  product_handle: string;
+  card_opaque_id: string;
 }
 
 // Mirrors backend cards table rows (no PAN/CVC — live-fetched only).

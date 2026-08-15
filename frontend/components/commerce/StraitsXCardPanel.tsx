@@ -5,7 +5,7 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import { Input, Field } from "../ui/Input";
-import { api, CardIssueResult } from "../../lib/api";
+import { api, CardIssueResult, CardCheckoutResult } from "../../lib/api";
 import { signTypedData, ensureChain } from "../../lib/wallet";
 
 // The card's EIP-712 domain names a chain; MetaMask refuses to sign a payload
@@ -41,6 +41,10 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<CardIssueResult | null>(null);
   const [iframe, setIframe] = useState<string | null>(null);
+  // Buy-a-product-with-this-card state.
+  const [handle, setHandle] = useState("");
+  const [variant, setVariant] = useState("");
+  const [order, setOrder] = useState<CardCheckoutResult | null>(null);
 
   // Read the connected (non-custodial) wallet — the one that signs and pays.
   const loadWallet = useCallback(async () => {
@@ -97,6 +101,32 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
       setBusy("Fetching card…");
       const v = await api.cardView(result.card_opaque_id, result.settlement_tx, walletAddress);
       setIframe(v.iframe_url ?? null);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function buy() {
+    if (!result || !walletAddress) return;
+    setErr(null);
+    setOrder(null);
+    if (!handle.trim() || !variant.trim()) {
+      setErr("Enter a product handle and variant id (grab them from the shop below).");
+      return;
+    }
+    try {
+      setBusy("Buying — driving the merchant checkout…");
+      const o = await api.cardCheckout({
+        card_opaque_id: result.card_opaque_id,
+        settlement_tx: result.settlement_tx,
+        wallet_address: walletAddress,
+        product_handle: handle.trim(),
+        variant_id: variant.trim(),
+        card_amount_sgd: Number(result.amount_sgd ?? amount),
+      });
+      setOrder(o);
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -167,6 +197,39 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
           <p className="text-xs text-ink-subtle">
             card id <span className="font-mono">{result.card_opaque_id}</span>
           </p>
+
+          {/* Buy a real product with this card — the full loop's last leg. */}
+          <div className="mt-2 pt-3 border-t border-hairline">
+            <div className="eyebrow mb-2">Buy a product with this card</div>
+            {order ? (
+              <div className="grid gap-1 text-[13px]">
+                <Badge tone="success" dot>
+                  ordered · {order.total_usd.toFixed(2)} · {order.order_reference}
+                </Badge>
+                <p className="text-ink-subtle">
+                  Ships to your Profile address. {order.pan_shim ? "(bogus gateway — test order)" : ""}
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="text-[13px] text-ink-muted mb-2 max-w-[42rem]">
+                  Uses this card at the merchant checkout, shipping to your Profile
+                  address. Grab the handle + variant id from the shop below.
+                </p>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <Field label="Product handle">
+                    <Input value={handle} onChange={(e) => setHandle(e.target.value)} className="w-[200px]" placeholder="the-product-handle" />
+                  </Field>
+                  <Field label="Variant id">
+                    <Input value={variant} onChange={(e) => setVariant(e.target.value)} className="w-[150px]" placeholder="4567890123" />
+                  </Field>
+                  <Button variant="secondary" onClick={buy} disabled={busy !== null}>
+                    {busy ?? "Buy with card"}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </Card>

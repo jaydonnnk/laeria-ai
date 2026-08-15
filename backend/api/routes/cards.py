@@ -118,6 +118,91 @@ def straitsx_view(req: CardViewRequest) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+class CardCheckoutRequest(BaseModel):
+    # The issued card to pay with.
+    card_opaque_id: str = Field(min_length=1)
+    settlement_tx: str = Field(min_length=1)
+    wallet_address: str = Field(min_length=42, max_length=42)
+    # The product to buy (from a storefront pick).
+    product_handle: str = Field(min_length=1)
+    variant_id: str = Field(min_length=1)
+    # The card's prepaid value — the checkout total may not exceed it.
+    card_amount_sgd: float = Field(gt=0, le=30)
+
+
+@router.post("/straitsx/checkout")
+def straitsx_checkout(req: CardCheckoutRequest) -> dict:
+    """Buy a real product with an issued StraitsX card: read the card's live
+    credentials, verify the product's DOM price fits the card's balance, then
+    drive the merchant checkout with the card and the user's Profile shipping.
+
+    The card credentials are fetched, used, and dropped — never stored. This is
+    the seam that turns 'the agent holds a funded card' into 'the agent bought
+    the thing and it ships to you'."""
+    import services.straitsx_card as sx
+    from services.cards import CardDetails
+    from services.checkout import (
+        CheckoutCeilingViolation,
+        execute_checkout,
+        shipping_for_current_user,
+    )
+    from services.storefront import StorefrontService
+
+    store = StorefrontService()
+    try:
+        verification = store.verify_product(req.product_handle)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"product verification failed: {exc}") from exc
+    if not verification.get("available"):
+        raise HTTPException(status_code=409, detail="product is not available")
+    price = float(verification.get("price_usd") or 0)
+    if price <= 0:
+        raise HTTPException(status_code=502, detail="could not read a live product price")
+
+    # The card is prepaid in SGD; the store prices in its own currency. Compared
+    # 1:1 like the rest of the build (no FX invented) — the checkout's own total
+    # gate re-checks against this ceiling before any card entry.
+    ceiling = req.card_amount_sgd
+    if price > ceiling:
+        raise HTTPException(
+            status_code=409,
+            detail=f"product price {price:.2f} exceeds the card's {ceiling:.2f} balance",
+        )
+
+    try:
+        creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address)
+    except sx.StraitsXCardError as exc:
+        raise HTTPException(status_code=502, detail=f"could not read card: {exc}") from exc
+    card = CardDetails(
+        number=creds["number"], cvc=creds["cvc"],
+        exp_month=creds["exp_month"], exp_year=creds["exp_year"],
+        brand="Visa", name=creds["name"] or "Laeria Agent",
+    )
+
+    try:
+        result = execute_checkout(
+            variant_id=req.variant_id,
+            card=card,
+            shipping=shipping_for_current_user(),
+            mandate_ceiling_usd=ceiling,
+            session_cookies=store._session_cookies(),
+        )
+    except CheckoutCeilingViolation as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"checkout failed: {exc}") from exc
+
+    return {
+        "order_reference": result.order_reference,
+        "total_usd": result.total_usd,
+        "gateway_profile": result.gateway_profile,
+        "pan_shim": result.pan_shim,
+        "screenshots": result.screenshots,
+        "product_handle": req.product_handle,
+        "card_opaque_id": req.card_opaque_id,
+    }
+
+
 @router.post("/test-issue")
 def test_issue(req: TestIssueRequest) -> dict:
     """Dev/demo: issue a card directly, outside the action pipeline.

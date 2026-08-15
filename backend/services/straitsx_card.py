@@ -149,13 +149,58 @@ def mcp_get_card(wallet_address: str, cardholder_name: str, amount_sgd: float) -
 
 
 def mcp_view_card(card_opaque_id: str, settlement_tx: str, wallet_address: str) -> dict:
-    """One-time iframe URL for an issued card. Ownership is checked server-side
-    against the paying wallet."""
+    """One-time iframe URL + rendered card_html for an issued card. Ownership is
+    checked server-side against the paying wallet."""
     return _mcp_call(f"view_card_{_env()}", {
         "card_opaque_id": card_opaque_id,
         "settlement_tx": settlement_tx,
         "wallet_address": wallet_address,
     })
+
+
+import re as _re
+
+
+def parse_card_html(html: str) -> dict:
+    """Pull the card credentials out of the rendered card_html (the CVV page).
+
+    Layout (StraitsX/Xfers): the PAN, expiry, CVV and name each sit in their own
+    labelled div — card-number / exp_val / cvv_val / card-holder-name. Returns
+    {number, cvc, exp_month, exp_year, name}. Never logged; the caller uses it to
+    fill a checkout and drops it. Raises if the PAN can't be found — a checkout
+    with no card number is a failure, not a blank field to submit."""
+
+    def grab(cls: str) -> str:
+        m = _re.search(rf'class="{cls}"[^>]*>\s*([^<]+?)\s*<', html, _re.DOTALL)
+        return m.group(1).strip() if m else ""
+
+    number = _re.sub(r"\s+", "", grab("card-number"))
+    if not _re.fullmatch(r"\d{13,19}", number):
+        raise StraitsXCardError("could not parse a card number from card_html")
+    cvc = _re.sub(r"\s+", "", grab("cvv_val"))
+    exp = grab("exp_val")  # "MM/YY"
+    mm, _, yy = exp.partition("/")
+    mm, yy = mm.strip(), yy.strip()
+    exp_month = int(mm) if mm.isdigit() else 0
+    exp_year = (2000 + int(yy)) if yy.isdigit() and len(yy) == 2 else (int(yy) if yy.isdigit() else 0)
+    return {
+        "number": number,
+        "cvc": cvc,
+        "exp_month": exp_month,
+        "exp_year": exp_year,
+        "name": grab("card-holder-name"),
+    }
+
+
+def card_credentials(card_opaque_id: str, settlement_tx: str, wallet_address: str) -> dict:
+    """Fetch an issued card's live credentials by viewing it and parsing the
+    rendered card_html. One-time per view — call it at checkout time, use it,
+    discard it. Never persist the result."""
+    view = mcp_view_card(card_opaque_id, settlement_tx, wallet_address)
+    html = view.get("card_html") or ""
+    if not html:
+        raise StraitsXCardError("view_card returned no card_html to parse")
+    return parse_card_html(html)
 
 
 # ---- cardapi x402: build the challenge, then submit the signed payment ----
