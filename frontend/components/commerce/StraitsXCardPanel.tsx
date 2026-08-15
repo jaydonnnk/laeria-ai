@@ -5,16 +5,8 @@ import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { Badge } from "../ui/Badge";
 import { Input, Field } from "../ui/Input";
-import { api, CardIssueResult, CardCheckoutResult } from "../../lib/api";
-import { signTypedData, ensureChain } from "../../lib/wallet";
-
-// The card's EIP-712 domain names a chain; MetaMask refuses to sign a payload
-// for a chain it isn't on. Switch to it first. Keyed by the chainId the backend
-// puts in typed_data.domain (43113 sandbox / 43114 production).
-const CARD_CHAINS: Record<number, { name: string; rpcUrl: string; explorer: string; nativeSymbol: string }> = {
-  43113: { name: "Avalanche Fuji", rpcUrl: "https://api.avax-test.network/ext/bc/C/rpc", explorer: "https://testnet.snowtrace.io", nativeSymbol: "AVAX" },
-  43114: { name: "Avalanche C-Chain", rpcUrl: "https://api.avax.network/ext/bc/C/rpc", explorer: "https://snowtrace.io", nativeSymbol: "AVAX" },
-};
+import { api, Card as CardRow, CardIssueResult } from "../../lib/api";
+import { issueCard } from "../../lib/cards";
 
 // Wallet (EIP-1193) errors are plain objects {code, message}, not Error
 // instances — String() on them yields the useless "[object Object]". Pull the
@@ -30,23 +22,46 @@ function errMsg(e: unknown): string {
   return String(e);
 }
 
-/** Non-custodial StraitsX card issuance. The user signs the card's EIP-3009
- *  XSGD payment in their own wallet — the key never leaves the browser. The
- *  backend builds the challenge and submits the signed payment (x402). */
+// The card we can currently buy with, resolved from EITHER a just-issued card OR
+// the newest persisted StraitsX card row. Persisting it is what makes the buy
+// survive a page reload — without it, a refresh would lose the card and force a
+// reissue, spending real XSGD again.
+interface ActiveCard {
+  cardOpaqueId: string;
+  settlementTx: string;
+  wallet: string;
+  amountSgd: number;
+  production: boolean;
+}
+
+function fromRow(row: CardRow): ActiveCard | null {
+  const m = row.metadata ?? {};
+  const tx = String(m.settlement_tx ?? "");
+  if (!tx) return null;
+  return {
+    cardOpaqueId: row.issuer_card_id,
+    settlementTx: tx,
+    wallet: String(m.payer ?? ""),
+    amountSgd: row.spend_limit_usd,
+    production: m.env === "production",
+  };
+}
+
+/** Non-custodial StraitsX card issuance + buy. The user signs the card's
+ *  EIP-3009 XSGD payment in their own wallet — the key never leaves the browser.
+ *  Issued cards persist, so the buy works even after a reload. */
 export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [name, setName] = useState("Laeria Agent");
   const [amount, setAmount] = useState("5");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [result, setResult] = useState<CardIssueResult | null>(null);
+  const [active, setActive] = useState<ActiveCard | null>(null);
   const [iframe, setIframe] = useState<string | null>(null);
-  // Buy-a-product-with-this-card state.
   const [handle, setHandle] = useState("");
   const [variant, setVariant] = useState("");
-  const [order, setOrder] = useState<CardCheckoutResult | null>(null);
+  const [order, setOrder] = useState<{ total: number; ref: string; test: boolean } | null>(null);
 
-  // Read the connected (non-custodial) wallet — the one that signs and pays.
   const loadWallet = useCallback(async () => {
     try {
       const a = await api.walletAllowance();
@@ -56,37 +71,53 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
     }
   }, []);
 
+  // Reload-safe: the newest active StraitsX card row becomes the buyable card,
+  // so a refresh doesn't lose it. A fresh issuance sets `active` directly, and
+  // this keeps it in sync with what's persisted.
+  const loadCards = useCallback(async () => {
+    try {
+      const rows = await api.listCards();
+      const straits = rows
+        .filter((r) => r.issuer === "straitsx" && r.status !== "canceled")
+        .map(fromRow)
+        .filter((c): c is ActiveCard => c !== null);
+      // Prefer the newest persisted card (carries the correct env for the
+      // explorer link); fall back to whatever we hold if none is stored yet.
+      setActive((cur) => straits[0] ?? cur);
+    } catch {
+      /* leave whatever we have */
+    }
+  }, []);
+
   useEffect(() => {
     loadWallet();
-  }, [loadWallet, refreshKey]);
+    loadCards();
+  }, [loadWallet, loadCards, refreshKey]);
 
   async function issue() {
     setErr(null);
+    setOrder(null);
     if (!walletAddress) {
       setErr("Connect your wallet above first — it signs and pays for the card.");
       return;
     }
     try {
-      setBusy("Preparing…");
-      const challenge = await api.cardChallenge(walletAddress, name.trim(), Number(amount));
-      // Switch the wallet to the chain the card's domain names, or MetaMask
-      // rejects the signature ("chainId must match the active chainId").
-      const chainId = Number(
-        (challenge.typed_data as { domain?: { chainId?: number } })?.domain?.chainId
-      );
-      if (chainId) {
-        setBusy(`Switching to ${CARD_CHAINS[chainId]?.name ?? "the card network"}…`);
-        await ensureChain(chainId, CARD_CHAINS[chainId]);
-      }
-      setBusy("Waiting for signature…");
-      const sig = await signTypedData(walletAddress, challenge.typed_data);
-      setBusy("Settling on-chain…");
-      const res = await api.cardIssue(challenge, sig);
-      setResult(res);
-      // Don't auto-render res.iframe_url: it's a ONE-TIME token, and React's
-      // dev StrictMode double-loads the iframe, burning it ("token used"). Let
-      // the user click "view card" to fetch a fresh token on demand.
+      const res: CardIssueResult = await issueCard({
+        walletAddress,
+        cardholderName: name.trim(),
+        amountSgd: Number(amount),
+        onStep: setBusy,
+      });
+      setActive({
+        cardOpaqueId: res.card_opaque_id,
+        settlementTx: res.settlement_tx,
+        wallet: walletAddress,
+        amountSgd: Number(res.amount_sgd ?? amount),
+        // The chain we signed on tells production from sandbox.
+        production: false, // refined by loadCards from the persisted env
+      });
       setIframe(null);
+      await loadCards();
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -95,11 +126,11 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
   }
 
   async function refreshView() {
-    if (!result || !walletAddress) return;
+    if (!active) return;
     setErr(null);
     try {
       setBusy("Fetching card…");
-      const v = await api.cardView(result.card_opaque_id, result.settlement_tx, walletAddress);
+      const v = await api.cardView(active.cardOpaqueId, active.settlementTx, active.wallet);
       setIframe(v.iframe_url ?? null);
     } catch (e) {
       setErr(errMsg(e));
@@ -109,7 +140,7 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
   }
 
   async function buy() {
-    if (!result || !walletAddress) return;
+    if (!active) return;
     setErr(null);
     setOrder(null);
     if (!handle.trim() || !variant.trim()) {
@@ -119,20 +150,23 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
     try {
       setBusy("Buying — driving the merchant checkout…");
       const o = await api.cardCheckout({
-        card_opaque_id: result.card_opaque_id,
-        settlement_tx: result.settlement_tx,
-        wallet_address: walletAddress,
+        card_opaque_id: active.cardOpaqueId,
+        settlement_tx: active.settlementTx,
+        wallet_address: active.wallet,
         product_handle: handle.trim(),
         variant_id: variant.trim(),
-        card_amount_sgd: Number(result.amount_sgd ?? amount),
+        card_amount_sgd: active.amountSgd,
       });
-      setOrder(o);
+      setOrder({ total: o.total_usd, ref: o.order_reference, test: o.pan_shim });
     } catch (e) {
       setErr(errMsg(e));
     } finally {
       setBusy(null);
     }
   }
+
+  const explorer = (tx: string, prod: boolean) =>
+    `${prod ? "https://snowtrace.io" : "https://testnet.snowtrace.io"}/tx/${tx}`;
 
   return (
     <Card className="p-5 mb-4 border-accent/30">
@@ -148,66 +182,52 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
 
       {err && <p className="text-[13px] text-danger mb-3">{err}</p>}
 
-      {!result ? (
-        <div className="flex items-end gap-3 flex-wrap">
-          <Field label="Cardholder name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} className="w-[200px]" maxLength={26} />
-          </Field>
-          <Field label="Amount (SGD)">
-            <Input
-              type="number" min={5} max={30} step={1}
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-[110px]"
-            />
-          </Field>
-          <Button onClick={issue} disabled={busy !== null}>
-            {busy ?? "Issue card"}
-          </Button>
-        </div>
-      ) : (
-        <div className="grid gap-3">
+      {/* Issue form — always available, so you can mint another card. */}
+      <div className="flex items-end gap-3 flex-wrap">
+        <Field label="Cardholder name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} className="w-[200px]" maxLength={26} />
+        </Field>
+        <Field label="Amount (SGD)">
+          <Input type="number" min={5} max={30} step={1} value={amount} onChange={(e) => setAmount(e.target.value)} className="w-[110px]" />
+        </Field>
+        <Button onClick={issue} disabled={busy !== null}>
+          {busy ?? (active ? "Issue another" : "Issue card")}
+        </Button>
+      </div>
+
+      {active && (
+        <div className="grid gap-3 mt-4 pt-4 border-t border-hairline">
           <div className="flex items-center gap-2 flex-wrap">
-            <Badge tone="success" dot>issued · {result.amount_sgd} SGD</Badge>
-            <a
-              className="text-[12px] font-mono text-accent hover:underline"
-              href={`https://testnet.snowtrace.io/tx/${result.settlement_tx}`}
-              target="_blank" rel="noreferrer"
-            >
+            <Badge tone="success" dot>card · {active.amountSgd} SGD</Badge>
+            <a className="text-[12px] font-mono text-accent hover:underline"
+               href={explorer(active.settlementTx, active.production)} target="_blank" rel="noreferrer">
               settlement tx ↗
             </a>
-            <button
-              onClick={refreshView}
-              className="text-[12px] font-mono uppercase tracking-wide text-ink-subtle hover:text-ink"
-            >
+            <button onClick={refreshView}
+              className="text-[12px] font-mono uppercase tracking-wide text-ink-subtle hover:text-ink">
               {busy ?? (iframe ? "refresh card" : "view card")}
             </button>
           </div>
           {iframe ? (
-            <iframe
-              src={iframe}
-              title="StraitsX card"
-              className="w-full max-w-[380px] h-[230px] rounded-[--radius] border border-hairline bg-white"
-            />
+            <iframe src={iframe} title="StraitsX card"
+              className="w-full max-w-[380px] h-[230px] rounded-[--radius] border border-hairline bg-white" />
           ) : (
             <p className="text-[13px] text-ink-subtle">
-              Card issued. The view is one-time — hit <b>view card</b> to load it.
+              The view is one-time — hit <b>view card</b> to load it.
             </p>
           )}
           <p className="text-xs text-ink-subtle">
-            card id <span className="font-mono">{result.card_opaque_id}</span>
+            card id <span className="font-mono">{active.cardOpaqueId}</span>
           </p>
 
-          {/* Buy a real product with this card — the full loop's last leg. */}
+          {/* Buy a real product with this card — the loop's last leg. */}
           <div className="mt-2 pt-3 border-t border-hairline">
             <div className="eyebrow mb-2">Buy a product with this card</div>
             {order ? (
               <div className="grid gap-1 text-[13px]">
-                <Badge tone="success" dot>
-                  ordered · {order.total_usd.toFixed(2)} · {order.order_reference}
-                </Badge>
+                <Badge tone="success" dot>ordered · {order.total.toFixed(2)} · {order.ref}</Badge>
                 <p className="text-ink-subtle">
-                  Ships to your Profile address. {order.pan_shim ? "(bogus gateway — test order)" : ""}
+                  Ships to your Profile address.{order.test ? " (bogus gateway — test order)" : ""}
                 </p>
               </div>
             ) : (
