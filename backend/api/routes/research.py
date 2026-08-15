@@ -37,15 +37,68 @@ class RetrospectiveRequest(BaseModel):
     thread_budget: int = Field(default=8, ge=2, le=20)
 
 
+def _guard_http(exc: Exception) -> HTTPException:
+    """Turn a guardrail refusal into the right HTTP answer.
+
+    Two different things, deliberately given two different codes:
+
+    * 400 — Bedrock refused the request. Nothing failed; retrying will refuse
+      again. Reported as a plain sentence, never as a server error, because
+      "something broke" would be a lie and would invite a retry.
+    * 503 — the safety check itself could not run, so the agent stopped
+      instead of continuing unverified. Retrying later is exactly right.
+
+    Neither carries a stack trace or an AWS message: the caller gets the
+    sentence the service wrote for them.
+    """
+    from services.bedrock_guardrails import GuardrailBlocked, GuardrailUnavailable
+
+    if isinstance(exc, GuardrailBlocked):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, GuardrailUnavailable):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=502, detail=f"research failed: {exc}")
+
+
+def _guard_query(query: str) -> str:
+    """Check a research question, and return the text that may be used.
+
+    RETURNS THE GUARDED TEXT, and callers must use it. When the guardrail
+    masks personal data out of a question, the masked form is the only version
+    that may travel onward; throwing the return value away and carrying on with
+    the original would pass the check and then leak anyway.
+
+    For the two `submit` endpoints this is an EARLY rejection only — the agent
+    checks the query again for itself, and that is the boundary that actually
+    protects the pipeline, because it holds for every caller including the
+    worker and the browser extension. This earlier check exists so the person
+    typing gets an immediate, clearly-worded answer instead of a background job
+    that fails a minute later.
+
+    For `/research/subreddits` there is no second check: that endpoint reaches
+    the planning model directly, so this IS its boundary.
+    """
+    from services.bedrock_guardrails import INPUT, get_guardrails
+
+    try:
+        return get_guardrails().ensure_allowed(query, INPUT, "research query")
+    except Exception as exc:  # noqa: BLE001
+        raise _guard_http(exc) from exc
+
+
 @router.post("/decision")
 def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
     """Mode 2 — deep multi-subreddit consensus brief. Synchronous."""
     query = effective_query(req.query, req.context)
     try:
         return ResearchAgent().synthesise_decision(query, thread_budget=req.thread_budget)
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("decision synthesis failed")
-        raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.exception("decision synthesis failed")
+        raise http from exc
 
 
 class ActOnBriefRequest(BaseModel):
@@ -184,11 +237,23 @@ def suggest_subreddits(q: str) -> dict:
     """
     if len(q.strip()) < 3:
         raise HTTPException(status_code=422, detail="q must be at least 3 characters")
+    # This endpoint reaches the planning LLM directly, without going through
+    # `synthesise_decision`, so it needs the input boundary of its own.
+    safe_q = _guard_query(q.strip())
     try:
-        plan = ResearchAgent()._identify_subreddits(q.strip())
+        plan = ResearchAgent()._identify_subreddits(safe_q)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("subreddit suggestion failed for %r: %s", q, exc)
-        raise HTTPException(status_code=502, detail=f"could not plan: {exc}") from exc
+        # The planner checks its own assembled prompt, so a refusal can also
+        # arrive from in there. Routed through the same mapper as everywhere
+        # else, or it would surface as "the server broke" rather than "this was
+        # refused". The query is not logged: it is user text, and this line
+        # fires on the path where the guardrail has just had reason to look
+        # at it.
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.warning("subreddit suggestion failed: %s", exc)
+            http = HTTPException(status_code=502, detail=f"could not plan: {exc}")
+        raise http from exc
     return {
         "subreddits": plan["subreddits"][:6],
         "search_queries": plan["search_queries"],
@@ -207,9 +272,13 @@ def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
         return ResearchAgent().mine_retrospectives(
             req.decision, req.context, thread_budget=req.thread_budget
         )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        logger.exception("retrospective mining failed")
-        raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.exception("retrospective mining failed")
+        raise http from exc
 
 
 # ---- job-based variants -------------------------------------------------
@@ -228,6 +297,9 @@ def submit_decision(req: DecisionRequest) -> JobAccepted:
     from services import jobs
 
     query = effective_query(req.query, req.context)
+    # Refuse here rather than inside the job, so a blocked question comes back
+    # as an immediate answer instead of a spinner that ends in an error.
+    _guard_query(query)
     job_id = jobs.submit(
         ResearchAgent().synthesise_decision,
         query,
@@ -241,6 +313,7 @@ def submit_decision(req: DecisionRequest) -> JobAccepted:
 def submit_retrospective(req: RetrospectiveRequest) -> JobAccepted:
     from services import jobs
 
+    _guard_query(effective_query(req.decision, req.context))
     job_id = jobs.submit(
         ResearchAgent().mine_retrospectives,
         req.decision,

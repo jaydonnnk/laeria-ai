@@ -133,8 +133,23 @@ class FakeLLM:
         self._relevance_reply = relevance_reply
         self._relevance_fails = relevance_fails
         self.worst_case_seconds = 1
+        # Every (system, user) this fake was asked. Lets a test assert what did
+        # — and did not — reach the model, which is the only way to prove that
+        # something was filtered out BEFORE the model saw it.
+        self.calls: list[tuple[str, str]] = []
+        # Every text handed to the embedding endpoint. A separate record
+        # because embeddings go out to the provider BEFORE the synthesis
+        # prompt is built, so "did not reach the model" and "did not reach the
+        # embedding provider" are two different questions.
+        self.embedded: list[str] = []
+
+    @property
+    def prompts(self) -> str:
+        """Everything ever sent to this model, as one string to search."""
+        return "\n".join(user for _, user in self.calls)
 
     def complete_json(self, system: str, user: str, max_tokens: int = 0, **kw) -> dict:
+        self.calls.append((system, user))
         if "identify which subreddits" in system:
             return {"subreddits": self._subreddits, "search_queries": ["q1", "q2"]}
         if "screen Reddit search results for relevance" in system:
@@ -167,6 +182,7 @@ class FakeLLM:
         }
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        self.embedded.extend(texts)
         if self._embed_fails:
             raise RuntimeError("embeddings unavailable")
         # Mutually distant unit vectors: no pair reaches the 0.90 threshold.

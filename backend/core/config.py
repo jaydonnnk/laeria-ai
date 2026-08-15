@@ -190,6 +190,24 @@ class Settings(BaseSettings):
     # makes the approved figure a real ceiling rather than a starting point.
     price_drift_tolerance: float = 0.05
 
+    # Amazon Bedrock Guardrails — the independent safety boundary that checks
+    # text crossing into and out of the agent. NOT an inference provider:
+    # OpenRouter still does the reasoning, and nothing here replaces it.
+    #
+    # Credentials are deliberately absent. boto3 reads them from its own
+    # provider chain (environment, shared config, or the IAM role in a
+    # deployment), so this application never holds an access key and the same
+    # code works locally and under a role. See services/bedrock_guardrails.py.
+    aws_region: str = "ap-southeast-1"
+    bedrock_guardrail_id: str = ""
+    # A numbered version, never DRAFT: DRAFT is mutable, so a guardrail could
+    # change under a running agent without any deploy.
+    bedrock_guardrail_version: str = "1"
+    # Off by default. Enabled, a failed safety check refuses the request; that
+    # is the correct behaviour at a boundary in front of money, and the wrong
+    # default for a checkout of the repository with no AWS account.
+    bedrock_guardrails_enabled: bool = False
+
     # App
     cors_origins: str = ""  # comma-separated; empty = allow all (dev)
     app_env: str = "development"

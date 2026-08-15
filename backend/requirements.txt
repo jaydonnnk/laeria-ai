@@ -34,6 +34,11 @@ eth-account==0.13.7
 # Card issuance (Stripe Issuing test mode; StraitsX adapter swaps in at event)
 stripe==12.4.0
 
+# Amazon Bedrock Guardrails — the safety boundary around the agent (input,
+# external content, and model output). Runtime only: no Bedrock foundation
+# model is invoked, and credentials come from boto3's own provider chain.
+boto3==1.43.71
+
 # Browser automation — e-commerce discovery + checkout executor.
 # After install run: playwright install chromium
 playwright==1.54.0

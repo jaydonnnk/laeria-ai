@@ -257,6 +257,11 @@ _EVIDENCE_STATE_REASONS: dict[EvidenceState, str] = {
         "Candidate discussions were found, but no full thread evidence could "
         "be retrieved for synthesis."
     ),
+    EvidenceState.UNSAFE_EVIDENCE: (
+        "Every discussion found for this question was rejected by the safety "
+        "layer, so none of it could be read. This is a judgement about those "
+        "threads, not about your question."
+    ),
 }
 
 

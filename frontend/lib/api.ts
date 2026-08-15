@@ -10,6 +10,44 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const RETRYABLE_METHODS = new Set(["GET", "HEAD"]);
 const RETRY_DELAY_MS = 600;
 
+/**
+ * A backend error with its status kept, and its message unwrapped.
+ *
+ * FastAPI answers with `{"detail": "..."}`. Showing the raw body put
+ * `400: {"detail":"..."}` in front of the user, which reads as a crash even
+ * when the backend sent a deliberate, plainly-worded refusal. The status is
+ * carried alongside so a page can tell a refusal (400) and a temporary outage
+ * (503) apart from something actually breaking.
+ */
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+
+  /** The request was understood and declined. Retrying changes nothing. */
+  get refused(): boolean {
+    return this.status === 400;
+  }
+
+  /** A dependency was unavailable. Retrying later is the right move. */
+  get unavailable(): boolean {
+    return this.status === 503;
+  }
+}
+
+async function apiError(res: Response): Promise<ApiError> {
+  const body = await res.text();
+  let message = body;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.detail === "string") message = parsed.detail;
+  } catch {
+    // Not JSON — the raw body is the best available message.
+  }
+  return new ApiError(res.status, message || `request failed (${res.status})`);
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -54,8 +92,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error("session expired — sign in again");
   }
   if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(`${res.status}: ${detail}`);
+    throw await apiError(res);
   }
   return res.json() as Promise<T>;
 }
@@ -129,7 +166,9 @@ export type EvidenceState =
   | "no_evidence"
   | "no_usable_evidence"
   | "source_unavailable"
-  | "not_in_corpus";
+  | "not_in_corpus"
+  /** Threads were read and the safety layer refused every one of them. */
+  | "unsafe_evidence";
 
 // Mirrors backend core/models.py SignalQuality.
 //
@@ -160,6 +199,11 @@ export interface SignalQuality {
   /** Model-authored claims about the evidence structure that contradicted the
    *  authoritative evidence set and were therefore not displayed. */
   unverified_claims_removed: number;
+  /** Threads the Bedrock guardrail refused. They are in none of the counts
+   *  above — this is the only record that they existed. */
+  unsafe_threads_excluded: number;
+  /** Model-authored strings the guardrail refused on the way out. */
+  guardrail_blocked_outputs: number;
   evidence_state: EvidenceState;
   date_range: string;
   bias_notes: string;

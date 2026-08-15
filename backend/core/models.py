@@ -55,6 +55,11 @@ class EvidenceState(str, Enum):
     NO_USABLE_EVIDENCE = "no_usable_evidence"  # candidates found, none usable
     SOURCE_UNAVAILABLE = "source_unavailable"  # Reddit itself could not be reached
     NOT_IN_CORPUS = "not_in_corpus"          # frozen corpus has no answer for this query
+    # Threads were retrieved and readable, and the safety layer refused every
+    # one of them. A distinct state because it has a distinct cause and a
+    # distinct honest explanation: nothing failed, and the question is fine —
+    # the evidence itself was not safe to read.
+    UNSAFE_EVIDENCE = "unsafe_evidence"
 
 
 class ActionType(str, Enum):
@@ -157,6 +162,15 @@ class SignalQuality(BaseModel):
     # Reported rather than hidden: a non-zero value here means the synthesis
     # said something the corpus disproves.
     unverified_claims_removed: int = 0
+
+    # Retrieved threads the Bedrock guardrail refused — prompt injection,
+    # credential bait, and the like. They never entered the corpus, so they
+    # are counted in none of the numbers above; this field is the only record
+    # that they existed.
+    unsafe_threads_excluded: int = 0
+    # Model-authored strings the guardrail refused on the way out, and so were
+    # never displayed.
+    guardrail_blocked_outputs: int = 0
 
     evidence_state: EvidenceState = EvidenceState.OK
     date_range: str = ""

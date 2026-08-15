@@ -28,6 +28,36 @@ class CreateItemRequest(BaseModel):
 @router.post("/items")
 def create_item(req: CreateItemRequest) -> dict:
     from db import repositories as repo
+    from services.bedrock_guardrails import (
+        INPUT,
+        GuardrailBlocked,
+        GuardrailUnavailable,
+        get_guardrails,
+    )
+
+    # EARLY REJECTION, NOT THE BOUNDARY.
+    #
+    # A refused name is worth catching here so the user is told immediately
+    # instead of creating an item that quietly fails every check. But this is
+    # not what protects the model: `AlertEngine.classify_run` checks the name
+    # again at the moment it would enter a prompt, which is the only place that
+    # also covers rows created before this integration existed, seeded or
+    # imported items, and internal callers.
+    #
+    # The RETURN VALUE IS DELIBERATELY DISCARDED, which is the opposite of the
+    # rule everywhere else in this codebase. Everywhere else the guarded text
+    # is about to be sent to a model, so using the original would leak. Here
+    # nothing is being sent — the name is being STORED. It is the user's own
+    # word for their own subscription, and rewriting "alerts for me@x.com" into
+    # "alerts for {EMAIL}" in their dashboard would corrupt their data to solve
+    # a problem the sending side already solves. Masked at the model boundary,
+    # intact in the database.
+    try:
+        get_guardrails().ensure_allowed(req.name, INPUT, "monitored item name")
+    except GuardrailBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GuardrailUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     item = MonitoredItem(
         user_id="",  # repository injects the owner id
@@ -80,8 +110,16 @@ def check_now(item_id: str) -> dict:
     row = repo.get_item(item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="item not found")
+    from services.bedrock_guardrails import GuardrailBlocked, GuardrailUnavailable
+
     try:
         return check_item(row)
+    except GuardrailUnavailable as exc:
+        # The safety check could not run, so the check stopped rather than
+        # classifying unverified posts. 503 says "try again", which is true.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GuardrailBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("run-now check failed")
         raise HTTPException(status_code=502, detail=f"check failed: {exc}") from exc

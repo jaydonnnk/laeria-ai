@@ -55,6 +55,15 @@ It fails open and says so: an LLM outage keeps every candidate and records
 "none of these are relevant" verdict is different from a failure and is
 honoured — the run ends as `no_evidence`.
 
+## Content safety (Amazon Bedrock Guardrails)
+Separate from every rule on this page, and asked earlier. The filters here
+judge how much a thread's signal is WORTH; the guardrail judges whether the
+text is safe to read at all — prompt injection aimed at the agent, credential
+bait, personal data. A thread it refuses never reaches the corpus, so it also
+never reaches any of the weighting above, any count, or any confidence.
+
+See **docs/BEDROCK_GUARDRAILS.md**. Enforced in code, off by default.
+
 ## Sarcasm and context
 Reddit uses heavy sarcasm. Read comment chains, not just top-level posts.
 "Oh yeah, X is great — if you like wasting money" is not positive signal.

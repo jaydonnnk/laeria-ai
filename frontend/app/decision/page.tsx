@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   api,
+  ApiError,
   ConfidenceLevel,
   EvidenceState,
   ResearchBrief,
@@ -62,6 +63,14 @@ const EVIDENCE_STATE_COPY: Record<
       "Search results were found, but no full thread could be retrieved to read.",
     detail:
       "The agent located candidate discussions but could not fetch any of them in full, so there was nothing to synthesise a recommendation from.",
+  },
+  unsafe_evidence: {
+    // Nothing failed and the question is fine. The threads themselves were
+    // refused, which is a judgement about them and about nothing else.
+    headline:
+      "The discussions found for this question were rejected by the safety check.",
+    detail:
+      "Every thread the agent read was refused before it could be used as evidence — usually because it carried instructions aimed at the agent rather than opinions aimed at people. Nothing from them was read, so no recommendation was formed.",
   },
 };
 
@@ -174,7 +183,12 @@ export default function DecisionPage() {
   const [query, setQuery] = useState("");
   const [context, setContext] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // `refused` separates "we declined this request" from "something broke".
+  // A safety refusal is a deliberate, final answer; prefixing it with
+  // "Research failed" would read as a crash and invite a pointless retry.
+  const [error, setError] = useState<{ message: string; refused: boolean } | null>(
+    null
+  );
   const [brief, setBrief] = useState<ResearchBrief | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [actOutcome, setActOutcome] = useState<string | null>(null);
@@ -217,7 +231,10 @@ export default function DecisionPage() {
       setBrief(await api.startDecision(q.trim(), ctx.trim(), 8, setElapsed));
       setResearched({ query: q.trim(), context: ctx.trim() });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError({
+        message: err instanceof Error ? err.message : String(err),
+        refused: err instanceof ApiError && err.refused,
+      });
     } finally {
       setLoading(false);
     }
@@ -292,7 +309,11 @@ export default function DecisionPage() {
       </Card>
 
       {loading && <ResearchProgress seconds={elapsed} />}
-      {error && <Banner tone="error" className="mb-6">Research failed: {error}</Banner>}
+      {error && (
+        <Banner tone={error.refused ? "info" : "error"} className="mb-6">
+          {error.refused ? error.message : `Research failed: ${error.message}`}
+        </Banner>
+      )}
 
       {brief && <BriefCard brief={brief} />}
 
