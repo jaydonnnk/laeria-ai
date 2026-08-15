@@ -29,6 +29,95 @@ def list_cards() -> list[dict]:
     return repo.list_cards()
 
 
+# ---- StraitsX non-custodial card issuance (MCP + x402) ----
+#
+# The card is paid for by an EIP-3009 XSGD payment the USER signs in their own
+# wallet (option A, non-custodial): the backend builds the challenge and, after
+# the browser returns a signature, assembles and submits the x402 payload. The
+# backend never holds the paying key. See services/straitsx_card.py.
+
+
+class CardChallengeRequest(BaseModel):
+    wallet_address: str = Field(min_length=42, max_length=42)
+    cardholder_name: str = Field(min_length=2, max_length=26)
+    amount_sgd: float = Field(ge=5, le=30)  # issuer floor is 5, ceiling 30
+
+
+class CardIssueRequest(BaseModel):
+    # The challenge returned by /challenge, round-tripped, plus the signature the
+    # wallet produced over challenge.typed_data.
+    challenge: dict
+    signature: str = Field(min_length=4)
+
+
+class CardViewRequest(BaseModel):
+    card_opaque_id: str = Field(min_length=1)
+    settlement_tx: str = Field(min_length=1)
+    wallet_address: str = Field(min_length=42, max_length=42)
+
+
+@router.post("/straitsx/challenge")
+def straitsx_challenge(req: CardChallengeRequest) -> dict:
+    """Prepare a card purchase: ask the issuer, trigger the 402, and return the
+    EIP-712 TransferWithAuthorization for the user's wallet to sign. No money
+    moves and nothing is signed here."""
+    import services.straitsx_card as sx
+
+    try:
+        mcp = sx.mcp_get_card(req.wallet_address, req.cardholder_name, req.amount_sgd)
+        challenge = sx.build_challenge(sx._cardapi_url(mcp), req.amount_sgd, req.cardholder_name)
+        return sx.prepare_signing(challenge, req.wallet_address)
+    except sx.StraitsXCardError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/straitsx/issue")
+def straitsx_issue(req: CardIssueRequest) -> dict:
+    """Submit the signed authorization to settle the x402 payment and mint the
+    card. The signature came from the user's wallet — the backend only relays."""
+    import services.straitsx_card as sx
+
+    from_address = (req.challenge.get("authorization") or {}).get("from")
+    if not from_address:
+        raise HTTPException(status_code=400, detail="challenge missing signer address")
+    try:
+        result = sx.submit_payment(req.challenge, from_address, req.signature)
+    except sx.StraitsXCardError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Persist a card row (last4 only — never the PAN). card_html carries the
+    # secrets and is returned to the client for this one response, not stored.
+    try:
+        repo.create_card(
+            issuer="straitsx",
+            issuer_card_id=result.get("card_opaque_id", ""),
+            last4="",
+            exp_month=0,
+            exp_year=0,
+            spend_limit_usd=float(str(result.get("amount_sgd", "0")).replace(",", "")),
+            status="active",
+            action_id=None,
+            metadata={
+                "settlement_tx": result.get("settlement_tx", ""),
+                "payer": from_address,
+                "env": get_settings().straitsx_card_env,
+            },
+        )
+    except Exception:  # noqa: BLE001 - the card exists on-chain; a DB miss must not 500
+        pass
+    return result
+
+
+@router.post("/straitsx/view")
+def straitsx_view(req: CardViewRequest) -> dict:
+    """Fetch a fresh one-time card view (iframe URL + rendered card_html)."""
+    import services.straitsx_card as sx
+
+    try:
+        return sx.mcp_view_card(req.card_opaque_id, req.settlement_tx, req.wallet_address)
+    except sx.StraitsXCardError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
 @router.post("/test-issue")
 def test_issue(req: TestIssueRequest) -> dict:
     """Dev/demo: issue a card directly, outside the action pipeline.

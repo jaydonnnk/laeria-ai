@@ -15,7 +15,17 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import actions, cards, monitor, obsidian, research, store, vendor, wallet
+from api.routes import (
+    actions,
+    cards,
+    monitor,
+    obsidian,
+    profile,
+    research,
+    store,
+    vendor,
+    wallet,
+)
 from core.auth import require_owner, require_user
 from core.current_user import CurrentUserMiddleware
 from core.config import get_settings
@@ -59,6 +69,7 @@ app.include_router(actions.router, dependencies=_user)
 app.include_router(store.router, dependencies=_user)
 app.include_router(cards.router, dependencies=_user)
 app.include_router(wallet.router, dependencies=_user)
+app.include_router(profile.router, dependencies=_user)
 
 # Owner only: the Obsidian vault is the one genuinely single, local instance —
 # it lives on the owner's machine and no per-user equivalent exists — so it

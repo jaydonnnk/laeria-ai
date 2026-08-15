@@ -311,6 +311,29 @@ export const api = {
     ),
   getDelegation: () => request<Delegation>("/actions/mandate/delegation"),
 
+  // Profile: the shipping details the agent needs to check out physical goods
+  // on the card rail. Falls back to the deployment's env address until saved.
+  getProfile: () => request<ProfileResponse>("/profile"),
+  putProfile: (s: ShippingInfo) =>
+    request<ProfileResponse>("/profile", { method: "PUT", body: JSON.stringify(s) }),
+
+  // StraitsX non-custodial card: challenge -> user signs in wallet -> issue.
+  cardChallenge: (wallet_address: string, cardholder_name: string, amount_sgd: number) =>
+    request<CardChallenge>("/cards/straitsx/challenge", {
+      method: "POST",
+      body: JSON.stringify({ wallet_address, cardholder_name, amount_sgd }),
+    }),
+  cardIssue: (challenge: CardChallenge, signature: string) =>
+    request<CardIssueResult>("/cards/straitsx/issue", {
+      method: "POST",
+      body: JSON.stringify({ challenge, signature }),
+    }),
+  cardView: (card_opaque_id: string, settlement_tx: string, wallet_address: string) =>
+    request<CardView>("/cards/straitsx/view", {
+      method: "POST",
+      body: JSON.stringify({ card_opaque_id, settlement_tx, wallet_address }),
+    }),
+
   // Audit-trail screenshots need the auth header, so <img src> can't load
   // them directly — fetch as a blob and hand back an object URL.
   screenshotUrl: async (category: "store" | "checkout", path: string) => {
@@ -384,6 +407,46 @@ export interface Delegation {
   expired?: boolean;
   verified?: boolean;
   reason?: string;
+}
+
+// The shipping details the agent ships physical goods to (card rail).
+export interface ShippingInfo {
+  name: string;
+  email: string;
+  address1: string;
+  city: string;
+  postal_code: string;
+  country_code: string; // ISO-3166 alpha-2, e.g. "SG"
+  zone_code: string; // state/province where a country needs one
+}
+
+export interface ProfileResponse {
+  shipping: Partial<ShippingInfo>;
+  complete: boolean; // true when the agent has everything it needs to ship
+}
+
+// StraitsX card issuance (non-custodial). The challenge is opaque to the UI
+// except typed_data, which the wallet signs; it round-trips back to /issue.
+export interface CardChallenge {
+  cardapi_url: string;
+  typed_data: unknown; // EIP-712 payload for eth_signTypedData_v4
+  authorization: { from: string; [k: string]: unknown };
+  [k: string]: unknown;
+}
+
+export interface CardIssueResult {
+  card_opaque_id: string;
+  settlement_tx: string;
+  iframe_url?: string;
+  amount_sgd?: string;
+  card_html?: string;
+  message?: string;
+}
+
+export interface CardView {
+  card_opaque_id: string;
+  iframe_url?: string;
+  card_html?: string;
 }
 
 // Mirrors backend cards table rows (no PAN/CVC — live-fetched only).

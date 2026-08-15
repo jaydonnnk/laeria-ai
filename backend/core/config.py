@@ -199,6 +199,12 @@ class Settings(BaseSettings):
     # possible time to be editing a client. See services/cards.py.
     straitsx_base_url: str = ""
     straitsx_api_key: str = ""
+    # StraitsX card MCP (the REAL issuer — MCP-over-SSE at card.straitsx.ai, not
+    # the REST fields above). "sandbox" = Fuji 43113 test XSGD, no whitelist;
+    # "production" = C-Chain 43114 real XSGD, wallet must be organizer-
+    # whitelisted. Issuance is an x402 EIP-3009 XSGD payment. See
+    # services/straitsx_card.py.
+    straitsx_card_env: str = "sandbox"
     # Auth scheme varies by provider: "Authorization: Bearer x" is the common
     # default, but plenty use "X-API-Key: x" with no prefix.
     straitsx_auth_header: str = "Authorization"

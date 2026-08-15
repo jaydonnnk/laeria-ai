@@ -304,6 +304,42 @@ def set_user_wallet(address: str, key_encrypted: str) -> dict:
     }
 
 
+# ---- shipping profile (profiles.shipping jsonb) ----
+
+
+def get_shipping() -> dict | None:
+    """The current user's saved shipping details, or None if never set.
+
+    Returns the raw dict the agent ships to
+    ({name, email, address1, city, postal_code, country_code, zone_code}).
+    A profile row that exists but has no shipping reads as None, same as no
+    row — the caller then falls back to the env shipping profile.
+    """
+    res = (
+        get_supabase()
+        .table("profiles")
+        .select("shipping")
+        .eq("id", _owner())
+        .limit(1)
+        .execute()
+    )
+    if not res.data:
+        return None
+    return res.data[0].get("shipping") or None
+
+
+def set_shipping(shipping: dict) -> dict:
+    """Persist the current user's shipping details. Upsert so it creates the
+    profile row if the account never set a mandate or wallet first."""
+    res = (
+        get_supabase()
+        .table("profiles")
+        .upsert({"id": _owner(), "shipping": shipping})
+        .execute()
+    )
+    return res.data[0].get("shipping") or {}
+
+
 # ---- actions ----
 
 def create_action(

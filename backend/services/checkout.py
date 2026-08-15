@@ -80,6 +80,45 @@ def shipping_from_settings() -> ShippingProfile:
     )
 
 
+# Fields the checkout cannot proceed without. zone_code is optional — only
+# countries with states/provinces need one.
+SHIPPING_REQUIRED = ("name", "email", "address1", "city", "postal_code", "country_code")
+
+
+def shipping_is_complete(data: dict | None) -> bool:
+    """True when every required field is present and non-blank."""
+    if not data:
+        return False
+    return all(str(data.get(f) or "").strip() for f in SHIPPING_REQUIRED)
+
+
+def shipping_for_current_user() -> ShippingProfile:
+    """The address the agent ships to for the signed-in user.
+
+    Prefers the user's saved profile; falls back to the env SHIPPING_* profile
+    when the account has not filled one in (or filled it only partway). The
+    fallback is all-or-nothing on purpose: merging a user's street with the env
+    city would ship to an address nobody actually chose.
+    """
+    from db import repositories as repo
+
+    try:
+        saved = repo.get_shipping()
+    except Exception:  # noqa: BLE001 - a profile read failure must not block checkout
+        saved = None
+    if shipping_is_complete(saved):
+        return ShippingProfile(
+            name=saved["name"],
+            email=saved["email"],
+            address1=saved["address1"],
+            city=saved["city"],
+            postal_code=saved["postal_code"],
+            country_code=saved["country_code"],
+            zone_code=saved.get("zone_code", "") or "",
+        )
+    return shipping_from_settings()
+
+
 # A money gate that only understands one currency is a money gate that stops
 # working the moment the store is repriced. The old pattern hardcoded `$`, so
 # an SGD store returned None on every read — safe, but the checkout could

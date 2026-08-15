@@ -135,6 +135,18 @@ export async function signMandateDelegation(
   return sig;
 }
 
+/** Sign an arbitrary EIP-712 typed-data payload (the backend builds it). Used
+ *  for the StraitsX card's EIP-3009 TransferWithAuthorization — the user signs
+ *  the card payment in their own wallet, keys never leave the browser. */
+export async function signTypedData(from: string, typedData: unknown): Promise<string> {
+  const eth = getEthereum();
+  if (!eth) throw new Error("No wallet found.");
+  return (await eth.request({
+    method: "eth_signTypedData_v4",
+    params: [from, JSON.stringify(typedData)],
+  })) as string;
+}
+
 /** Send an ERC-20 approve(operator, amount). Returns the tx hash. */
 export async function approveSpending(params: {
   from: string;

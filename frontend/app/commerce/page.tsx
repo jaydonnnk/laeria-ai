@@ -10,6 +10,7 @@ import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
 import { Stepper, Step, StepState } from "../../components/commerce/Stepper";
 import { WalletConnect } from "../../components/commerce/WalletConnect";
+import { StraitsXCardPanel } from "../../components/commerce/StraitsXCardPanel";
 import { shake } from "../../lib/motion";
 import {
   api,
@@ -506,6 +507,9 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
   const [funding, setFunding] = useState(false);
   const [fundMsg, setFundMsg] = useState<React.ReactNode>(null);
   const [err, setErr] = useState<string | null>(null);
+  // Bumped on every refresh so the card panel re-reads the connected wallet
+  // right after a connect/approve.
+  const [walletTick, setWalletTick] = useState(0);
   // Always the symbol the backend reports. The fallback is only for the frame
   // before balances load — it names the asset this build showcases rather than
   // a different one, because a panel reading the wrong ticker while the chain
@@ -517,6 +521,7 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
       const b = await api.walletBalances();
       setBalances(b);
       setErr(null);
+      setWalletTick((t) => t + 1);
       onFunded((b.agent.token ?? 0) > 0);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -562,6 +567,8 @@ function FundingSection({ onFunded }: { onFunded: (v: boolean) => void }) {
       </p>
 
       <WalletConnect onChange={refresh} />
+
+      <StraitsXCardPanel refreshKey={walletTick} />
 
       <details className="mb-4">
         <summary className="text-sm text-ink-subtle cursor-pointer mb-2">

@@ -15,6 +15,7 @@ const NAV = [
   { href: "/monitor", label: "Monitor" },
   { href: "/commerce", label: "Commerce" },
   { href: "/actions", label: "Actions" },
+  { href: "/profile", label: "Profile" },
 ];
 
 // App chrome. Hidden on the cinematic landing and the login page (they carry

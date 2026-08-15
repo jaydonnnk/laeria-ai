@@ -245,7 +245,7 @@ def _execute_card_purchase(action: dict) -> dict:
     from services.checkout import (
         CheckoutCeilingViolation,
         execute_checkout,
-        shipping_from_settings,
+        shipping_for_current_user,
     )
     from services.payment import MandateViolation, PaymentService, vendor_host
     from services.storefront import StorefrontService
@@ -376,7 +376,7 @@ def _execute_card_purchase(action: dict) -> dict:
         result = execute_checkout(
             variant_id=variant_id,
             card=details,
-            shipping=shipping_from_settings(),
+            shipping=shipping_for_current_user(),
             mandate_ceiling_usd=ceiling,
             session_cookies=store._session_cookies(),
         )
