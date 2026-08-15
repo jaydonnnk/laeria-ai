@@ -540,7 +540,7 @@ class WalletService:
         the blanket testnet-only refusal on `_transfer`:
 
           * mainnet needs ALLOW_MAINNET_SETTLEMENT explicitly set, AND
-          * the amount must fit under MAX_SETTLEMENT_USD.
+          * the amount must fit under MAX_SETTLEMENT (token units).
 
         Both are on top of the ERC-20 allowance itself (the chain refuses a
         transferFrom exceeding what the user approved) and the mandate's human
@@ -556,10 +556,10 @@ class WalletService:
                     f"mainnet settlement is disabled on {self._net['name']} — "
                     "set ALLOW_MAINNET_SETTLEMENT to move real funds"
                 )
-            if amount > s.max_settlement_usd + 1e-9:
+            if amount > s.max_settlement + 1e-9:
                 raise WalletError(
                     f"settlement {amount:.2f} exceeds the mainnet cap of "
-                    f"{s.max_settlement_usd:.2f} — refusing"
+                    f"{s.max_settlement:.2f} — refusing"
                 )
         if amount <= 0:
             raise WalletError("amount must be positive")

@@ -29,6 +29,11 @@ def _env(monkeypatch):
     monkeypatch.setenv("X402_TREASURY_ADDRESS", "0x" + "cc" * 20)
     monkeypatch.setenv("OWNER_USER_ID", OWNER_UID)
     monkeypatch.delenv("WALLET_ENCRYPTION_KEY", raising=False)
+    # Pin the settlement gate explicitly — otherwise these tests inherit
+    # whatever is in the developer's real .env (e.g. a live mainnet flip), and
+    # the "refused unless enabled" case would sail past the guard.
+    monkeypatch.setenv("ALLOW_MAINNET_SETTLEMENT", "false")
+    monkeypatch.setenv("MAX_SETTLEMENT", "5")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -94,7 +99,7 @@ def test_mainnet_settlement_refused_unless_enabled(monkeypatch):
 def test_mainnet_settlement_refused_over_the_cap(monkeypatch):
     _go_mainnet(monkeypatch)
     monkeypatch.setenv("ALLOW_MAINNET_SETTLEMENT", "true")
-    monkeypatch.setenv("MAX_SETTLEMENT_USD", "5")
+    monkeypatch.setenv("MAX_SETTLEMENT", "5")
     get_settings.cache_clear()
     with pytest.raises(W.WalletError, match="cap"):
         W.WalletService()._transfer_from(OWNER, MERCHANT, 10.0)

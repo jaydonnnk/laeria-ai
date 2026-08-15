@@ -124,11 +124,12 @@ class Settings(BaseSettings):
     # but a CAPPED, user-approved transferFrom is the one real-money path we
     # open — and only when this is explicitly True, and only up to the cap.
     allow_mainnet_settlement: bool = False
-    # Hard ceiling, in token units, on any single on-chain settlement. A
-    # belt-and-suspenders bound on top of the mandate and the allowance, so a
-    # bug in either cannot drain more than this from a connected wallet. Sized
-    # for the $30 demo grant, not production.
-    max_settlement_usd: float = 5.0
+    # Hard ceiling on any single on-chain settlement, in TOKEN UNITS (XSGD) —
+    # settlement never FX-converts, and the name carries no currency suffix so a
+    # judge can't mistake the SGD-pegged asset for dollars. Belt-and-suspenders
+    # over the mandate and the allowance: a bug in either cannot drain more than
+    # this from a connected wallet. Sized for the 30-XSGD demo grant.
+    max_settlement: float = 5.0
     # Comma-separated extra networks to register the signer for, beyond
     # x402_network. See docs/HACKATHON_SWAP.md.
     x402_extra_networks: str = ""
