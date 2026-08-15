@@ -260,17 +260,48 @@ class PaymentService:
 
 @lru_cache
 def _resource_server():
-    """Singleton resource server wired to the hosted facilitator."""
-    from x402.http.facilitator_client import HTTPFacilitatorClientSync
+    """Singleton resource server. Wired to a LOCAL self-facilitator when
+    X402_SELF_FACILITATE is set (so XSGD settles on-chain with no external
+    facilitator), otherwise to the configured hosted facilitator."""
     from x402.mechanisms.evm.exact import register_exact_evm_server
     from x402.server import x402ResourceServerSync
 
     settings = get_settings()
-    facilitator = HTTPFacilitatorClientSync({"url": settings.x402_facilitator_url})
+    if settings.x402_self_facilitate:
+        from services.x402_facilitator import local_facilitator
+
+        facilitator = local_facilitator()
+    else:
+        from x402.http.facilitator_client import HTTPFacilitatorClientSync
+
+        facilitator = HTTPFacilitatorClientSync({"url": settings.x402_facilitator_url})
     server = x402ResourceServerSync(facilitator)
     register_exact_evm_server(server, networks=settings.x402_network)
     server.initialize()
     return server
+
+
+def _price_for(price_usd: float):
+    """Price for a ResourceConfig. Self-facilitating with a configured token
+    (XSGD) declares that token explicitly as an AssetAmount — its address plus
+    the EIP-712 domain the buyer must sign against. Otherwise a plain dollar
+    string lets the facilitator pick its default stablecoin (USDC)."""
+    s = get_settings()
+    if s.x402_self_facilitate and s.stablecoin_contract:
+        from x402.schemas.base import AssetAmount
+
+        from services.wallet import configured_token_decimals
+
+        units = int(round(price_usd * 10 ** configured_token_decimals()))
+        return AssetAmount(
+            amount=str(units),
+            asset=s.stablecoin_contract,
+            extra={
+                "name": s.x402_asset_eip712_name,
+                "version": s.x402_asset_eip712_version,
+            },
+        )
+    return f"${price_usd}"
 
 
 def build_requirements(price_usd: float, resource_path: str):
@@ -283,7 +314,7 @@ def build_requirements(price_usd: float, resource_path: str):
     config = ResourceConfig(
         scheme="exact",
         pay_to=settings.x402_treasury_address,
-        price=f"${price_usd}",
+        price=_price_for(price_usd),
         network=settings.x402_network,
         max_timeout_seconds=120,
     )

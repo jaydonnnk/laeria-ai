@@ -88,6 +88,23 @@ class Settings(BaseSettings):
     x402_treasury_address: str = ""
     x402_treasury_private_key: str = ""
 
+    # ---- x402 self-facilitation (WS-x402) ----
+    # No public facilitator settles XSGD on Avalanche, so the demo vendor
+    # facilitates its OWN payments: it registers a local EIP-3009 facilitator
+    # that verifies the signed authorization and submits transferWithAuthorization
+    # on-chain via a relayer wallet. XSGD is a Circle FiatToken (FiatTokenV2_2),
+    # so it supports EIP-3009 natively — the x402 "exact" scheme's home ground.
+    x402_self_facilitate: bool = False
+    # The relayer that submits transferWithAuthorization and pays gas. Holds no
+    # user funds — it only relays a signature the payer already made. Needs
+    # native gas on the x402 network. Blank falls back to the treasury key.
+    x402_relayer_private_key: str = ""
+    # The token's EIP-712 domain, which the buyer signs against and the contract
+    # verifies. FiatToken uses {name: <token name>, version: "2"}; a wrong value
+    # makes every transferWithAuthorization revert. XSGD's name() reads "XSGD".
+    x402_asset_eip712_name: str = "XSGD"
+    x402_asset_eip712_version: str = "2"
+
     # Per-user custodial wallets. Each signed-in account gets its own generated
     # agent keypair (see services/wallet.ensure_user_wallet); the private key
     # is Fernet-encrypted with this symmetric key before it touches the

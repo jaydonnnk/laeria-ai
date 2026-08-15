@@ -34,6 +34,8 @@ def _env(monkeypatch):
     # the "refused unless enabled" case would sail past the guard.
     monkeypatch.setenv("ALLOW_MAINNET_SETTLEMENT", "false")
     monkeypatch.setenv("MAX_SETTLEMENT", "5")
+    # Pin empty so the suite doesn't inherit a real .env merchant address.
+    monkeypatch.setenv("MERCHANT_SETTLEMENT_ADDRESS", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

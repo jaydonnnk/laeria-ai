@@ -28,7 +28,9 @@ def _base_env(monkeypatch):
     monkeypatch.setenv("X402_NETWORK", "eip155:43113")
     monkeypatch.setenv("X402_AGENT_PRIVATE_KEY", AGENT_KEY)
     monkeypatch.setenv("X402_TREASURY_ADDRESS", TREASURY)
-    monkeypatch.delenv("MERCHANT_SETTLEMENT_ADDRESS", raising=False)
+    # Pin empty (not just delenv) so the suite doesn't inherit a real .env that
+    # has a merchant address set — pydantic reads the .env file past delenv.
+    monkeypatch.setenv("MERCHANT_SETTLEMENT_ADDRESS", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
