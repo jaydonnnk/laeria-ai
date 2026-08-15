@@ -207,6 +207,8 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
         # (milestone 4): the on-chain XSGD settlement tx + the card it funded.
         "settlement_tx": req.settlement_tx,
         "card_opaque_id": req.card_opaque_id,
+        # So the UI links the right explorer (Fuji vs C-Chain) for the tx.
+        "env": get_settings().straitsx_card_env,
     }
     if req.action_id:
         try:

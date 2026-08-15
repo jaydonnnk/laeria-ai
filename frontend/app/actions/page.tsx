@@ -299,6 +299,9 @@ export default function ActionsPage() {
                   {typeof a.metadata?.error === "string" && (
                     <p className="mt-1.5 text-[13px] text-danger">{a.metadata.error}</p>
                   )}
+                  {typeof a.metadata?.settlement_tx === "string" && (
+                    <Receipt meta={a.metadata} />
+                  )}
                 </Card>
               ))}
             </div>
@@ -486,6 +489,38 @@ function ProposeCardPurchase({
         </div>
       </Card>
     </section>
+  );
+}
+
+// The milestone-4 receipt: it ties the card authorization to the on-chain XSGD
+// balance it drew on. Shows what was bought where, the card that paid, and the
+// settlement tx — the tamper-evident link between the purchase and the wallet.
+function Receipt({ meta }: { meta: Record<string, unknown> }) {
+  const tx = String(meta.settlement_tx ?? "");
+  const cardId = String(meta.card_opaque_id ?? "");
+  const order = String(meta.order_reference ?? "");
+  const shop = String(meta.product_handle ?? meta.description ?? "");
+  const prod = meta.env === "production";
+  const explorer = `${prod ? "https://snowtrace.io" : "https://testnet.snowtrace.io"}/tx/${tx}`;
+  const testOrder = meta.pan_shim === true;
+
+  return (
+    <div className="mt-2 rounded-[--radius] border border-hairline bg-surface-2 px-3 py-2 text-[12px] grid gap-1">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge tone="success" dot>receipt</Badge>
+        {order && <span className="font-mono text-ink">order {order}</span>}
+        {shop && <span className="text-ink-subtle">· {shop}</span>}
+        {testOrder && <span className="text-warning">· test order (bogus gateway)</span>}
+      </div>
+      <div className="text-ink-subtle">
+        funded by{" "}
+        <a className="font-mono text-accent hover:underline" href={explorer} target="_blank" rel="noreferrer">
+          XSGD settlement {tx.slice(0, 10)}…{tx.slice(-6)} ↗
+        </a>{" "}
+        {prod ? "(C-Chain)" : "(Fuji)"}
+      </div>
+      {cardId && <div className="text-ink-subtle font-mono">card {cardId}</div>}
+    </div>
   );
 }
 

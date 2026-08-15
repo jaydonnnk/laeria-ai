@@ -171,7 +171,7 @@ export default function CommercePage() {
         target_url: p.url,
         category: "commerce",
         description: `[Store] ${p.title}`.slice(0, 200),
-        rail: "card",
+        rail: "straitsx_card",
         product_handle: p.handle,
         variant_id: p.variant_id,
       });
@@ -180,6 +180,10 @@ export default function CommercePage() {
         shake(btn);
         setError(
           String(a.metadata?.mandate_violation ?? a.metadata?.error ?? res.outcome)
+        );
+      } else if (a.status === "pending_signature") {
+        setInfo(
+          `${res.outcome} — go to Actions → “Sign to buy” to sign the card payment and complete it.`
         );
       } else if (a.status === "pending_approval") {
         setInfo(`${res.outcome} — approve it on the Actions page within 10 minutes.`);
@@ -430,7 +434,7 @@ function ProductRow({
               onClick={() => onBuy(buyRef.current)}
               disabled={busy || !p.available}
             >
-              {buying ? "Agent buying…" : "Buy with agent"}
+              {buying ? "Proposing…" : "Buy with card"}
             </Button>
             <a
               href={p.url}
