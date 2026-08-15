@@ -39,9 +39,12 @@ class ProposeRequest(BaseModel):
     target_url: str = Field(min_length=8, max_length=500)
     category: str = ""
     description: str = ""
-    # Payment rail: "x402" (crypto, the original path) or "card" (disposable
-    # virtual card + browser checkout on the demo storefront).
-    rail: str = Field(default="x402", pattern="^(x402|card)$")
+    # Payment rail: "x402" (crypto, the original path), "card" (disposable
+    # virtual card + browser checkout on the demo storefront), or "straitsx_card"
+    # (a real StraitsX Visa the user funds by signing an x402 XSGD payment in
+    # their own wallet — non-custodial, so it parks for a signature rather than
+    # executing autonomously).
+    rail: str = Field(default="x402", pattern="^(x402|card|straitsx_card)$")
     # Card rail only: which storefront product is being bought.
     product_handle: str = ""
     variant_id: str = ""
@@ -582,7 +585,7 @@ def propose_action(req: ProposeRequest) -> dict:
 
     # Price discovery: what does the target actually cost? A failed discovery
     # refuses outright — never treat an unreachable/erroring vendor as free.
-    if req.rail == "card":
+    if req.rail in ("card", "straitsx_card"):
         if req.type != "purchase":
             raise HTTPException(status_code=422, detail="card rail supports purchases only")
         if not req.product_handle or not req.variant_id:
@@ -612,7 +615,7 @@ def propose_action(req: ProposeRequest) -> dict:
         amount = float(offer["amount_usd"]) if offer else 0.0
 
     base_meta: dict = {"description": req.description, "rail": req.rail}
-    if req.rail == "card":
+    if req.rail in ("card", "straitsx_card"):
         base_meta["product_handle"] = req.product_handle
         base_meta["variant_id"] = req.variant_id
 
@@ -634,6 +637,25 @@ def propose_action(req: ProposeRequest) -> dict:
     expires_at = (
         datetime.now(timezone.utc) + timedelta(minutes=APPROVAL_WINDOW_MINUTES)
     ).isoformat()
+
+    # The StraitsX card is funded by the user's own wallet signature, so it can
+    # NEVER execute autonomously — the agent cannot forge that signature. It
+    # parks for the human to sign & buy. The signature is itself the
+    # authorization, so this one state covers both within-mandate and
+    # above-threshold; only a hard mandate violation (handled above) refuses.
+    # The card must at least meet the issuer's 5-30 SGD bounds and cover the
+    # price (compared 1:1, no FX invented — same as the rest of the build).
+    if req.rail == "straitsx_card":
+        import math
+
+        card_amount = min(30.0, max(5.0, float(math.ceil(amount))))
+        action = repo.create_action(
+            req.type, req.target_url, "pending_signature", amount,
+            {**base_meta, "reason": reason, "card_amount_sgd": card_amount,
+             "price_usd": amount},
+        )
+        return {"action": action,
+                "outcome": "awaiting your signature to fund the card and buy"}
 
     if needs_confirmation:
         action = repo.create_action(

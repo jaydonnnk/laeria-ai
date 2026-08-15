@@ -235,7 +235,7 @@ export const api = {
     target_url: string;
     category?: string;
     description?: string;
-    rail?: "x402" | "card";
+    rail?: "x402" | "card" | "straitsx_card";
     product_handle?: string;
     variant_id?: string;
   }) =>
@@ -342,6 +342,7 @@ export const api = {
     product_handle: string;
     variant_id: string;
     card_amount_sgd: number;
+    action_id?: string;
   }) => request<CardCheckoutResult>("/cards/straitsx/checkout", {
     method: "POST",
     body: JSON.stringify(body),
@@ -592,7 +593,7 @@ export interface PayAction {
   id: string;
   type: string;
   target: string;
-  status: "pending_approval" | "approved" | "executed" | "cancelled" | "failed";
+  status: "pending_approval" | "pending_signature" | "approved" | "executed" | "cancelled" | "failed";
   amount_usd: number;
   metadata: Record<string, unknown>;
   created_at: string;

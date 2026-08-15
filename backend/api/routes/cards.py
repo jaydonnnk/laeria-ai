@@ -128,6 +128,9 @@ class CardCheckoutRequest(BaseModel):
     variant_id: str = Field(min_length=1)
     # The card's prepaid value — the checkout total may not exceed it.
     card_amount_sgd: float = Field(gt=0, le=30)
+    # Optional: the pending_signature action this fulfils. When set, a successful
+    # checkout marks that action executed and records the receipt on it.
+    action_id: str | None = None
 
 
 @router.post("/straitsx/checkout")
@@ -188,9 +191,32 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
             session_cookies=store._session_cookies(),
         )
     except CheckoutCeilingViolation as exc:
+        _fail_action(req.action_id, str(exc), cancelled=True)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
+        _fail_action(req.action_id, str(exc))
         raise HTTPException(status_code=502, detail=f"checkout failed: {exc}") from exc
+
+    receipt = {
+        "rail": "straitsx_card",
+        "order_reference": result.order_reference,
+        "gateway_profile": result.gateway_profile,
+        "pan_shim": result.pan_shim,
+        "checkout_screenshots": result.screenshots,
+        # The receipt that ties the card authorization to the balance it drew on
+        # (milestone 4): the on-chain XSGD settlement tx + the card it funded.
+        "settlement_tx": req.settlement_tx,
+        "card_opaque_id": req.card_opaque_id,
+    }
+    if req.action_id:
+        try:
+            repo.update_action(req.action_id, {
+                "status": "executed",
+                "amount_usd": result.total_usd,
+                "metadata": {**(repo.get_action(req.action_id) or {}).get("metadata", {}), **receipt},
+            })
+        except Exception:  # noqa: BLE001 - the order exists on-chain; a DB miss must not 500
+            pass
 
     return {
         "order_reference": result.order_reference,
@@ -201,6 +227,22 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
         "product_handle": req.product_handle,
         "card_opaque_id": req.card_opaque_id,
     }
+
+
+def _fail_action(action_id: str | None, error: str, *, cancelled: bool = False) -> None:
+    """Record a checkout failure on the pending action, if there is one. A card
+    that was funded but couldn't check out is an honest 'funded, not ordered'
+    on the receipt — never a silent drop."""
+    if not action_id:
+        return
+    try:
+        meta = (repo.get_action(action_id) or {}).get("metadata", {})
+        repo.update_action(action_id, {
+            "status": "cancelled" if cancelled else "failed",
+            "metadata": {**meta, "error": error},
+        })
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @router.post("/test-issue")

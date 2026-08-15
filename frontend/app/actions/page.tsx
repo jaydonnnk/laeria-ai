@@ -9,12 +9,14 @@ import { Stat } from "../../components/ui/Stat";
 import { Banner, SectionHeader } from "../../components/ui/Banner";
 import { Input, Field } from "../../components/ui/Input";
 import { DelegationPanel } from "../../components/actions/DelegationPanel";
+import { issueAndBuy } from "../../lib/cards";
 import { shake } from "../../lib/motion";
 
 const STATUS_TONE: Record<string, "success" | "info" | "warning" | "neutral" | "danger"> = {
   executed: "success",
   approved: "info",
   pending_approval: "warning",
+  pending_signature: "info",
   cancelled: "neutral",
   failed: "danger",
 };
@@ -113,6 +115,7 @@ export default function ActionsPage() {
   }
 
   const pending = actions.filter((a) => a.status === "pending_approval");
+  const pendingSig = actions.filter((a) => a.status === "pending_signature");
 
   return (
     <main className="max-w-[1100px] mx-auto px-6 py-10 md:py-14">
@@ -184,6 +187,26 @@ export default function ActionsPage() {
             <DelegationPanel />
           </section>
 
+          {/* Awaiting the user's wallet signature — non-custodial StraitsX card */}
+          {pendingSig.length > 0 && (
+            <section className="mb-10">
+              <SectionHeader title="Sign to buy" aside={`${pendingSig.length} awaiting signature`} />
+              <div className="grid gap-3">
+                {pendingSig.map((a) => (
+                  <SignAndBuyCard
+                    key={a.id}
+                    action={a}
+                    onDone={async (outcome) => {
+                      setInfo(outcome);
+                      await refresh();
+                    }}
+                    onError={setError}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Pending approvals */}
           {pending.length > 0 && (
             <section className="mb-10">
@@ -229,6 +252,14 @@ export default function ActionsPage() {
               </Button>
             </Card>
           </section>
+
+          <ProposeCardPurchase
+            onProposed={async (outcome) => {
+              setInfo(outcome);
+              await refresh();
+            }}
+            onError={setError}
+          />
 
           <BazaarSection
             onProposed={async (outcome) => {
@@ -329,6 +360,132 @@ function CapField({
         </span>
       )}
     </Field>
+  );
+}
+
+// A purchase the agent proposed on the StraitsX-card rail. It can't execute
+// autonomously — funding the card needs the user's own wallet signature — so it
+// waits here for one click: sign, issue the card, and buy, all in a row.
+function SignAndBuyCard({
+  action,
+  onDone,
+  onError,
+}: {
+  action: PayAction;
+  onDone: (outcome: string) => Promise<void>;
+  onError: (e: string) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const meta = action.metadata ?? {};
+  const handle = String(meta.product_handle ?? "");
+  const variant = String(meta.variant_id ?? "");
+  const cardAmt = Number(meta.card_amount_sgd ?? 0);
+  const desc = String(meta.description ?? action.target ?? "");
+
+  async function signAndBuy() {
+    setBusy("Checking wallet…");
+    onError("");
+    try {
+      const alw = await api.walletAllowance();
+      if (!alw.address || alw.custodial) {
+        throw new Error("Connect your wallet on the Commerce page first (non-custodial).");
+      }
+      const order = await issueAndBuy({
+        walletAddress: alw.address,
+        cardholderName: "Laeria Agent",
+        amountSgd: cardAmt || Math.max(5, Math.ceil(action.amount_usd)),
+        productHandle: handle,
+        variantId: variant,
+        actionId: action.id,
+        onStep: setBusy,
+      });
+      await onDone(`Bought ${desc || handle} — order ${order.order_reference}, ships to your Profile.`);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card className="p-5 border-l-2 border-l-accent">
+      <div className="flex items-center gap-2 flex-wrap mb-1">
+        <Badge tone="accent">straitsx card</Badge>
+        <span className="tnum text-ink font-medium">${action.amount_usd.toFixed(2)}</span>
+        <span className="text-sm text-ink-muted">{desc}</span>
+      </div>
+      <p className="text-[13px] text-ink-subtle mb-3">
+        Sign in your wallet to fund a {cardAmt || "—"} SGD card and buy this — keys
+        never leave your browser. Ships to your Profile address.
+      </p>
+      <Button onClick={signAndBuy} disabled={busy !== null}>
+        {busy ?? "Sign & buy"}
+      </Button>
+    </Card>
+  );
+}
+
+// Propose a purchase on the StraitsX-card rail. The agent price-checks it
+// against the mandate, then parks it in "Sign to buy" — it can't spend without
+// the user's signature. (In the full demo this is proposed from research; here
+// it's a direct handle+variant entry so the rail is testable on its own.)
+function ProposeCardPurchase({
+  onProposed,
+  onError,
+}: {
+  onProposed: (outcome: string) => Promise<void>;
+  onError: (e: string) => void;
+}) {
+  const [handle, setHandle] = useState("");
+  const [variant, setVariant] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function propose() {
+    if (!handle.trim() || !variant.trim()) {
+      onError("Enter a product handle and variant id.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.proposeAction({
+        type: "purchase",
+        target_url: `https://store/products/${handle.trim()}`,
+        rail: "straitsx_card",
+        product_handle: handle.trim(),
+        variant_id: variant.trim(),
+        description: handle.trim(),
+      });
+      await onProposed(res.outcome);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="mb-10">
+      <SectionHeader title="Buy with a StraitsX card" aside="milestone 4 · you sign to fund" />
+      <Card className="p-5">
+        <p className="text-sm text-ink-muted mb-4 max-w-[46rem]">
+          Propose a real purchase on the card rail. The agent checks it against
+          your mandate, then parks it in <b>Sign to buy</b> — it can&apos;t spend
+          without your wallet signature. Grab a product handle + variant id from
+          the Commerce shop.
+        </p>
+        <div className="flex items-end gap-2 flex-wrap">
+          <Field label="Product handle">
+            <Input value={handle} onChange={(e) => setHandle(e.target.value)} className="w-[200px]" placeholder="the-product-handle" />
+          </Field>
+          <Field label="Variant id">
+            <Input value={variant} onChange={(e) => setVariant(e.target.value)} className="w-[150px]" placeholder="4567890123" />
+          </Field>
+          <Button variant="secondary" onClick={propose} disabled={busy}>
+            {busy ? "Proposing…" : "Propose to agent"}
+          </Button>
+        </div>
+      </Card>
+    </section>
   );
 }
 
