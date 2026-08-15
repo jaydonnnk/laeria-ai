@@ -80,8 +80,16 @@ def check_now(item_id: str) -> dict:
     row = repo.get_item(item_id)
     if row is None:
         raise HTTPException(status_code=404, detail="item not found")
+    from services.bedrock_guardrails import GuardrailBlocked, GuardrailUnavailable
+
     try:
         return check_item(row)
+    except GuardrailUnavailable as exc:
+        # The safety check could not run, so the check stopped rather than
+        # classifying unverified posts. 503 says "try again", which is true.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GuardrailBlocked as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("run-now check failed")
         raise HTTPException(status_code=502, detail=f"check failed: {exc}") from exc

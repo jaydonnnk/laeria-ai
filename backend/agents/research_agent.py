@@ -32,6 +32,31 @@ logger = get_logger(__name__)
 # expensive part — one HTTP request each, politely paced.
 _SEARCH_LIMIT_PER_SUB = 10
 _MAX_SUBREDDITS = 4
+
+# Model-authored FREE TEXT that must clear the output guardrail before it can
+# be displayed. Structured values are absent on purpose: `confidence` is one of
+# three fixed words and `outcome_split` is coerced to floats, and constraining
+# a value to a fixed set is a stronger check than a content filter.
+_MODEL_AUTHORED_FIELDS = (
+    "consensus_pick",
+    "strengths",
+    "failure_modes",
+    "what_reviewers_miss",
+    "alternatives",
+    "red_flags",
+    "bias_notes",
+)
+_OUTCOME_AUTHORED_FIELDS = (
+    "common_positives",
+    "common_regrets",
+    "surprising_findings",
+    "sample_bias",
+)
+# The same free text, in a STORED brief. Derived from the list above rather
+# than retyped, so the two cannot drift: the only difference is that
+# `bias_notes` sits under `signal_quality` once a brief is serialised, and is
+# screened separately in `_guard_cached_brief`.
+_CACHED_BRIEF_FIELDS = tuple(f for f in _MODEL_AUTHORED_FIELDS if f != "bias_notes")
 # How many Reddit requests may be in flight at once. This does NOT raise the
 # request rate — RedditService paces process-wide off one cursor — it only
 # stops each request's latency being stacked on top of every other request's
@@ -209,10 +234,131 @@ class NoRecordedPlan(RuntimeError):
 
 class ResearchAgent:
     def __init__(
-        self, reddit: RedditService | None = None, llm: LLMService | None = None
+        self,
+        reddit: RedditService | None = None,
+        llm: LLMService | None = None,
+        guardrails=None,  # noqa: ANN001
     ) -> None:
+        from services.bedrock_guardrails import get_guardrails
+
         self._reddit = reddit or RedditService()
         self._llm = llm or LLMService()
+        # Injectable so no test needs AWS. Defaults to the shared instance,
+        # which is a clean no-op unless BEDROCK_GUARDRAILS_ENABLED is set.
+        self._guard = guardrails if guardrails is not None else get_guardrails()
+
+    # ---- Bedrock trust boundaries ----
+    #
+    # Three small helpers, kept together so the whole safety surface of this
+    # agent is readable in one place. See services/bedrock_guardrails.py.
+
+    def _guard_threads(
+        self, threads: list[RedditThread]
+    ) -> tuple[list[RedditThread], dict[str, str]]:
+        """Screen threads. Returns (survivors, sanitized text by thread id).
+
+        Each thread is checked as exactly the text `_build_corpus` would render
+        for it, so what was inspected is what would have been sent. source is
+        INPUT, not OUTPUT: Bedrock's prompt-attack filter only runs on the
+        input side, and injection hidden in someone else's comment is the whole
+        reason this call exists.
+
+        THE SANITIZED TEXT IS KEPT, not discarded. Embeddings go out to
+        OpenRouter BEFORE the synthesis prompt is assembled and masked, so a
+        consumer that re-derived its own text from the raw thread would send
+        unmasked personal data through that call — a side door around the
+        masking that had already happened. `_safe_views` turns this dict into
+        the per-thread view `analyse_threads` embeds.
+
+        The threads themselves are NEVER modified. Sanitized text lives in a
+        dict keyed by id, so ids, ordering and the displayed source list stay
+        exactly what they were.
+
+        One poisoned thread costs that thread, not the run. An outage raises,
+        because synthesising from text nobody checked is the thing this is
+        here to prevent.
+        """
+        from services.bedrock_guardrails import INPUT, GuardrailUnavailable
+
+        if not self._guard.enabled or not threads:
+            return list(threads), {}
+
+        verdicts = self._guard.check_many([_build_corpus([t]) for t in threads], INPUT)
+        if any(v.unavailable for v in verdicts):
+            raise GuardrailUnavailable()
+
+        safe: list[RedditThread] = []
+        sanitized: dict[str, str] = {}
+        for thread, verdict in zip(threads, verdicts):
+            if verdict.blocked:
+                # Reddit's own thread id only — never the text that tripped it.
+                logger.warning(
+                    "guardrail rejected thread %s: %s", thread.id, verdict.reason
+                )
+                continue
+            safe.append(thread)
+            sanitized[thread.id] = verdict.text
+            if verdict.masked:
+                logger.warning(
+                    "guardrail masked thread %s: %s", thread.id, verdict.reason
+                )
+        if len(safe) != len(threads):
+            logger.warning(
+                "guardrail excluded %d of %d threads", len(threads) - len(safe),
+                len(threads),
+            )
+        return safe, sanitized
+
+    def _guard_cached_brief(self, cached: dict) -> ResearchBrief:
+        """Screen a brief coming back off disk before it leaves the agent.
+
+        A cache hit skips synthesis entirely, so it skips the output guardrail
+        with it. The cache is disk-backed and survives restarts on purpose,
+        which means a brief written before this boundary existed — or while it
+        was switched off — can be served long afterwards with its model-authored
+        text never having been checked at all.
+
+        Only the model's FREE TEXT is screened. Everything else in a brief is a
+        count, a date range, a fixed word, or a Reddit-supplied identifier, and
+        running a content filter over those would be theatre. Displayed source
+        titles stay as they are, exactly as on the live path — they link to the
+        real thread.
+
+        An outage raises, so an unverifiable cached brief is not served.
+        """
+        if not self._guard.enabled:
+            return ResearchBrief.model_validate(cached)
+
+        clean, _ = self._guard.sanitize_model_output(
+            cached, _CACHED_BRIEF_FIELDS, "cached research brief"
+        )
+        # `bias_notes` is nested under signal_quality in a STORED brief, while
+        # it is top-level in the raw model response the live path screens. Same
+        # text, two shapes, so it needs its own pass rather than being missed.
+        signal_quality = clean.get("signal_quality")
+        if isinstance(signal_quality, dict):
+            clean["signal_quality"], _ = self._guard.sanitize_model_output(
+                signal_quality, ("bias_notes",), "cached research brief"
+            )
+        return ResearchBrief.model_validate(clean)
+
+    def _guard_titles(self, batch: list[RedditThread]) -> tuple[list[RedditThread], str]:
+        """Guard search-result titles before a classifying model reads them.
+
+        Returns the surviving threads and the prompt block to send — built
+        here and returned, so the checked text is the sent text.
+        """
+        from services.bedrock_guardrails import INPUT
+
+        lines = [f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in batch]
+        screened = self._guard.screen_batch(lines, INPUT)
+        safe = [batch[i] for i in screened.kept]
+        if screened.dropped:
+            logger.warning(
+                "guardrail excluded %d of %d candidate titles",
+                screened.dropped, len(batch),
+            )
+        return safe, screened.text
 
     # ---- Mode 2 (Phase 1) ----
 
@@ -230,12 +376,24 @@ class ResearchAgent:
         """
         from core.config import get_settings
         from services import research_cache
+        from services.bedrock_guardrails import INPUT
 
         ttl = get_settings().research_cache_seconds
+
+        # Boundary 1: the user's own words, before anything acts on them.
+        #
+        # Checked BEFORE the cache read, so a refused question cannot be
+        # answered by having been asked once already. `query` is rebound to the
+        # guarded text, which means every stage below is safe by default; the
+        # cache keeps its own key so a stored brief is still findable by the
+        # words the user actually typed.
+        cache_key = query
+        query = self._guard.ensure_allowed(query, INPUT, "research query")
+
         if use_cache:
-            cached = research_cache.get(query, kind="decision", ttl_seconds=ttl)
+            cached = research_cache.get(cache_key, kind="decision", ttl_seconds=ttl)
             if cached is not None:
-                return ResearchBrief.model_validate(cached)
+                return self._guard_cached_brief(cached)
         # 1. Identify where to look (LLM) — including 2-3 query phrasings,
         #    because Reddit search is literal keyword matching.
         #
@@ -321,10 +479,20 @@ class ResearchAgent:
         if not filtered:
             return _empty_brief(subreddits, "Threads found but none passed signal filters.")
 
+        # Boundary 2: other people's text, before it becomes model context.
+        # A refused thread is left out and the run continues on the rest.
+        filtered, safe_text = self._guard_threads(filtered)
+        if not filtered:
+            return _empty_brief(
+                subreddits,
+                "Threads were found and read, but the safety layer rejected all "
+                "of them, so none could be used.",
+            )
+
         # 5. Synthesise (LLM).
-        brief = self._synthesise(query, filtered, subreddits)
+        brief = self._synthesise(query, filtered, subreddits, safe_text)
         if use_cache:
-            research_cache.put(query, brief.model_dump(mode="json"), kind="decision")
+            research_cache.put(cache_key, brief.model_dump(mode="json"), kind="decision")
         return brief
 
     # ---- internals ----
@@ -373,9 +541,17 @@ class ResearchAgent:
                     "Reddit access is blocked upstream."
                 )
 
-        raw = self._llm.complete_json(
-            _IDENTIFY_SYSTEM, f"Research query: {query}", max_tokens=400
+        # Boundary 3: the exact string the model receives. The query was
+        # guarded on its own, but what reaches the model is the query wrapped
+        # in a label, and one rule everywhere beats a rule with exceptions.
+        from services.bedrock_guardrails import GuardrailBlocked
+
+        user_msg, safe = self._guard.screen_prompt(
+            f"Research query: {query}", "subreddit planner"
         )
+        if not safe:
+            raise GuardrailBlocked()
+        raw = self._llm.complete_json(_IDENTIFY_SYSTEM, user_msg, max_tokens=400)
         subs = [s.strip().removeprefix("r/") for s in raw.get("subreddits", []) if s.strip()]
         if not subs:
             raise ValueError(f"LLM returned no subreddits for query: {query!r}")
@@ -389,11 +565,21 @@ class ResearchAgent:
         return plan
 
     def _synthesise(
-        self, query: str, threads: list[RedditThread], subreddits: list[str]
+        self,
+        query: str,
+        threads: list[RedditThread],
+        subreddits: list[str],
+        safe_text: dict[str, str] | None = None,
     ) -> ResearchBrief:
         from agents.signal_analysis import analyse_threads
 
-        threads, machine_warnings = analyse_threads(threads, self._llm)
+        # The sanitized copy reaches the duplicate detector too. Embeddings go
+        # out BEFORE the prompt is assembled, so passing the already-guarded
+        # text here is what stops masked personal data leaving through that
+        # call instead.
+        threads, machine_warnings = analyse_threads(
+            threads, self._llm, _safe_views(safe_text or {})
+        )
         corpus = _build_corpus(threads)
         analysis_block = (
             "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
@@ -401,7 +587,24 @@ class ResearchAgent:
             if machine_warnings
             else ""
         )
-        user_msg = f"Research query: {query}\n\nThread excerpts:\n\n{corpus}{analysis_block}"
+        # Boundary 3 for synthesis: the finished prompt, checked as one string.
+        #
+        # Every piece of it has been screened — the question, each thread — but
+        # never together, and meaning can live in the relationship between two
+        # innocent fragments. Checked ONCE and reused by both halves, which
+        # send the identical user message. A refusal here means no brief: every
+        # thread passed on its own, so there is no thread to blame and no
+        # smaller corpus known to be safe.
+        user_msg, prompt_safe = self._guard.screen_prompt(
+            f"Research query: {query}\n\nThread excerpts:\n\n{corpus}{analysis_block}",
+            "research synthesis",
+        )
+        if not prompt_safe:
+            return _empty_brief(
+                subreddits,
+                "The assembled discussion text was rejected by the safety "
+                "layer, so it was not sent for synthesis.",
+            )
 
         # Output tokens dominate this call — measured at ~59s for one ~2000
         # token JSON body, which was the single largest cost in a query. The
@@ -443,11 +646,27 @@ class ResearchAgent:
                       "alternatives", "red_flags", "bias_notes")
         ):
             logger.warning("synthesis returned all-empty fields; retrying once")
-            raw = self._llm.complete_json(
-                _SYNTHESIS_SYSTEM,
+            # A DIFFERENT string from the one checked above — no analysis
+            # block — so it needs its own verdict rather than inheriting one.
+            retry_msg, retry_safe = self._guard.screen_prompt(
                 f"Research query: {query}\n\nThread excerpts:\n\n{corpus}",
-                max_tokens=2000,
+                "research synthesis retry",
             )
+            if retry_safe:
+                raw = self._llm.complete_json(
+                    _SYNTHESIS_SYSTEM, retry_msg, max_tokens=2000
+                )
+            else:
+                logger.warning("retry prompt refused; leaving the brief empty")
+
+        # Boundary 4: the model's own words, before they reach a screen.
+        # Free text only — `confidence` is one of three fixed words and is
+        # coerced by `_safe_confidence`, which is a stronger check than a
+        # content filter.
+        raw, _ = self._guard.sanitize_model_output(
+            raw, _MODEL_AUTHORED_FIELDS, "research synthesis"
+        )
+
         dates = [t.created_utc for t in threads if t.created_utc]
         date_range = ""
         if dates:
@@ -492,7 +711,17 @@ class ResearchAgent:
         than THIN_COVERAGE_THRESHOLD retrospective posts are found. Never
         fabricates confidence.
         """
-        query = f"{decision} ({context})" if context else decision
+        from services.bedrock_guardrails import INPUT
+
+        # Same first boundary as Mode 2: the user's words are checked before
+        # any model or search sees them, and the guarded text is what the rest
+        # of the run uses.
+        query = self._guard.ensure_allowed(
+            f"{decision} ({context})" if context else decision,
+            INPUT,
+            "retrospective query",
+        )
+        decision = self._guard.ensure_allowed(decision, INPUT, "retrospective decision")
 
         # 1. Where to look + the community's phrasings of the topic.
         plan = self._identify_subreddits(query)
@@ -528,8 +757,18 @@ class ResearchAgent:
         if not full_threads:
             return _empty_outcomes("Retrospective posts found but none could be fetched.")
 
+        # Same external-content boundary as Mode 2.
+        full_threads, safe_text = self._guard_threads(full_threads)
+        if not full_threads:
+            return _empty_outcomes(
+                "Retrospective posts were found and read, but the safety layer "
+                "rejected all of them."
+            )
+
         # 5. Synthesise outcomes.
-        summary = self._synthesise_outcomes(decision, full_threads, len(retro_candidates))
+        summary = self._synthesise_outcomes(
+            decision, full_threads, len(retro_candidates), safe_text
+        )
         summary.thin_coverage = thin
         if thin:
             summary.confidence = ConfidenceLevel.LOW
@@ -545,12 +784,18 @@ class ResearchAgent:
         # cut drops the weakest candidates instead of whichever subreddit
         # happened to be searched last.
         batch = sorted(candidates, key=_engagement_key, reverse=True)[:60]
-        lines = "\n".join(f"{t.id} | r/{t.subreddit} | {t.title[:120]}" for t in batch)
-        raw = self._llm.complete_json(
-            _CLASSIFY_SYSTEM,
+        # Titles are external content, and this is the first place they reach
+        # a model. Then the assembled prompt gets its own verdict.
+        batch, lines = self._guard_titles(batch)
+        if not batch:
+            return set()
+        user_msg, safe = self._guard.screen_prompt(
             f"Decision being researched: {decision}\n\nCandidate posts:\n{lines}",
-            max_tokens=1500,
+            "retrospective classifier",
         )
+        if not safe:
+            return set()
+        raw = self._llm.complete_json(_CLASSIFY_SYSTEM, user_msg, max_tokens=1500)
         ids = raw.get("retrospective_ids", [])
         # Models sometimes echo ids with the t3_ fullname prefix — normalise.
         return {
@@ -558,11 +803,17 @@ class ResearchAgent:
         }
 
     def _synthesise_outcomes(
-        self, decision: str, threads: list[RedditThread], retro_count: int
+        self,
+        decision: str,
+        threads: list[RedditThread],
+        retro_count: int,
+        safe_text: dict[str, str] | None = None,
     ) -> OutcomeSummary:
         from agents.signal_analysis import analyse_threads
 
-        threads, machine_warnings = analyse_threads(threads, self._llm)
+        threads, machine_warnings = analyse_threads(
+            threads, self._llm, _safe_views(safe_text or {})
+        )
         corpus = _build_corpus(threads)
         analysis_block = (
             "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
@@ -570,12 +821,20 @@ class ResearchAgent:
             if machine_warnings
             else ""
         )
-        raw = self._llm.complete_json(
-            _OUTCOMES_SYSTEM,
+        user_msg, safe = self._guard.screen_prompt(
             f"Decision: {decision}\n\nRetrospective threads (from people who "
             f"made this decision; {retro_count} identified in total, "
             f"{len(threads)} read in full):\n\n{corpus}{analysis_block}",
-            max_tokens=2500,
+            "retrospective synthesis",
+        )
+        if not safe:
+            return _empty_outcomes(
+                "The assembled discussion text was rejected by the safety "
+                "layer, so it was not sent for synthesis."
+            )
+        raw = self._llm.complete_json(_OUTCOMES_SYSTEM, user_msg, max_tokens=2500)
+        raw, _ = self._guard.sanitize_model_output(
+            raw, _OUTCOME_AUTHORED_FIELDS, "retrospective synthesis"
         )
         pct = raw.get("outcome_split", {})
         return OutcomeSummary(
@@ -646,6 +905,41 @@ def _build_corpus(threads: list[RedditThread]) -> str:
             lines.append(f"COMMENT: {c[:600]}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
+
+
+def _content_parts(block: str) -> tuple[str, str]:
+    """(title, post) read back out of a rendered thread block.
+
+    Reading back a block this module generated is exact rather than
+    approximate: the prefixes are ours, and Reddit's own parser collapses
+    newlines out of titles, bodies and comments before they ever get here, so
+    a value can never span two lines.
+    """
+    title = ""
+    post = ""
+    for line in block.split("\n"):
+        if not title and line.startswith("TITLE: "):
+            title = line[len("TITLE: "):]
+        elif not post and line.startswith("POST: "):
+            post = line[len("POST: "):]
+    return title, post
+
+
+def _safe_views(sanitized: dict[str, str]) -> dict:
+    """Per-thread sanitized strings for `analyse_threads`, keyed by thread id.
+
+    The embedding input keeps its existing meaning — title plus the first 600
+    characters of the body — and only its SOURCE changes: the guardrail's
+    cleaned copy instead of the raw thread. On unsanitized input the two are
+    byte-identical, which `test_the_embedding_formula_is_unchanged` pins.
+    """
+    from agents.signal_analysis import SafeThreadText
+
+    views = {}
+    for tid, block in sanitized.items():
+        title, post = _content_parts(block)
+        views[tid] = SafeThreadText(title=title, embed=f"{title}\n{post[:600]}")
+    return views
 
 
 def _to_sources(threads: list[RedditThread]) -> list[SourceThread]:

@@ -46,3 +46,8 @@ tenacity==9.0.0
 pytest==8.3.3
 pytest-asyncio==0.24.0
 ruff==0.7.1
+
+# Amazon Bedrock Guardrails — the safety boundary around the agent (input,
+# external content, and model output). Runtime only: no Bedrock foundation
+# model is invoked, and credentials come from boto3's own provider chain.
+boto3==1.43.71

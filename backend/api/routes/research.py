@@ -37,6 +37,27 @@ class RetrospectiveRequest(BaseModel):
     thread_budget: int = Field(default=8, ge=2, le=20)
 
 
+def _guard_http(exc: Exception) -> HTTPException:
+    """Turn a guardrail refusal into the right HTTP answer.
+
+    Two different things, two different codes:
+
+    * 400 — Bedrock refused the request. Nothing failed; retrying will refuse
+      again. Reported as a plain sentence, never as a server error.
+    * 503 — the safety check itself could not run, so the agent stopped instead
+      of continuing unverified. Retrying later is exactly right.
+
+    Neither carries a stack trace or an AWS message.
+    """
+    from services.bedrock_guardrails import GuardrailBlocked, GuardrailUnavailable
+
+    if isinstance(exc, GuardrailBlocked):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, GuardrailUnavailable):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=502, detail=f"research failed: {exc}")
+
+
 @router.post("/decision")
 def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
     """Mode 2 — deep multi-subreddit consensus brief. Synchronous."""
@@ -44,8 +65,10 @@ def start_decision_synthesis(req: DecisionRequest) -> ResearchBrief:
     try:
         return ResearchAgent().synthesise_decision(query, thread_budget=req.thread_budget)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("decision synthesis failed")
-        raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.exception("decision synthesis failed")
+        raise http from exc
 
 
 class ActOnBriefRequest(BaseModel):
@@ -106,8 +129,15 @@ def suggest_subreddits(q: str) -> dict:
     try:
         plan = ResearchAgent()._identify_subreddits(q.strip())
     except Exception as exc:  # noqa: BLE001
-        logger.warning("subreddit suggestion failed for %r: %s", q, exc)
-        raise HTTPException(status_code=502, detail=f"could not plan: {exc}") from exc
+        # This endpoint reaches the planning model directly, and the planner
+        # guards its own assembled prompt — so a refusal can arrive from in
+        # there and must not surface as "the server broke". The query is not
+        # logged: it is user text on a path the guardrail has just inspected.
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.warning("subreddit suggestion failed: %s", exc)
+            http = HTTPException(status_code=502, detail=f"could not plan: {exc}")
+        raise http from exc
     return {
         "subreddits": plan["subreddits"][:6],
         "search_queries": plan["search_queries"],
@@ -127,8 +157,10 @@ def start_retrospective(req: RetrospectiveRequest) -> OutcomeSummary:
             req.decision, req.context, thread_budget=req.thread_budget
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("retrospective mining failed")
-        raise HTTPException(status_code=502, detail=f"research failed: {exc}") from exc
+        http = _guard_http(exc)
+        if http.status_code == 502:
+            logger.exception("retrospective mining failed")
+        raise http from exc
 
 
 # ---- job-based variants -------------------------------------------------

@@ -43,9 +43,19 @@ def shop(req: ShopRequest) -> dict:
     so no instruction can talk its way into a purchase.
     """
     from agents.shopping_agent import ShoppingAgent
+    from services.bedrock_guardrails import GuardrailBlocked, GuardrailUnavailable
 
     try:
         pick = ShoppingAgent().shop(req.instruction)
+    except GuardrailBlocked as exc:
+        # The caller's own request was refused. 400, not 502: nothing failed,
+        # and dressing a refusal up as a server error would tell someone to
+        # retry a request that will always be refused.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except GuardrailUnavailable as exc:
+        # The safety check could not run, so the agent stopped rather than
+        # shopping unverified. 503 says "try again", which is the truth.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"shopping agent failed: {exc}")
 
