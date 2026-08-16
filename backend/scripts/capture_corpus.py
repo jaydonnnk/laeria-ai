@@ -47,6 +47,22 @@ DEMO_QUERIES = [
     "best budget mechanical keyboard for programming under $100",
 ]
 
+# The least evidence a replay may deliver and still count as working.
+#
+# Not a confidence target — nothing here asserts high or moderate, and query 3
+# is SUPPOSED to come back weak. This asserts only that the corpus still hands
+# synthesis real threads to reason over, which is the thing that broke: a
+# ranking change made the selector choose threads whose full text was never
+# captured, and every one of them failed to fetch. The old check called that a
+# pass, because a brief built from zero threads still returns a valid object.
+_MIN_THREADS = {
+    "best noise cancelling headphones for open office": 5,
+    "is the Steam Deck OLED worth it in 2026": 5,
+    # Deliberately weak, but "weak" means thin/tangential evidence — not NO
+    # evidence. One thread is a broken corpus, not an honest answer.
+    "best budget mechanical keyboard for programming under $100": 3,
+}
+
 
 def capture(queries: list[str]) -> int:
     from agents.research_agent import ResearchAgent
@@ -74,7 +90,17 @@ def capture(queries: list[str]) -> int:
 
 
 def verify() -> int:
-    """Prove the corpus can drive the demo with no network at all."""
+    """Prove the corpus can drive the demo with no network at all.
+
+    "Did not raise" is not proof. Every degraded path in the research agent
+    returns a perfectly valid ResearchBrief carrying zero threads, so a check
+    that only catches exceptions passes just as happily on a corpus that can no
+    longer answer anything. This inspects the EVIDENCE instead: threads read,
+    sources cited, and a per-query floor.
+
+    Confidence is deliberately not asserted. Requiring a label would create
+    pressure to inflate one, and query 3 is supposed to come back weak.
+    """
     from agents.research_agent import ResearchAgent
     from services import reddit_fixtures as fx
 
@@ -84,16 +110,35 @@ def verify() -> int:
 
     ok = 0
     for q in DEMO_QUERIES:
+        floor = _MIN_THREADS.get(q, 1)
         try:
-            brief = ResearchAgent().synthesise_decision(q)
+            # Cache OFF: a stored brief would let this pass without the corpus
+            # being touched at all, which is the opposite of what it proves.
+            brief = ResearchAgent().synthesise_decision(q, use_cache=False)
         except Exception as exc:  # noqa: BLE001
-            print(f"  FAIL {q}\n       {exc}")
+            print(f"  FAIL {q}\n       raised: {exc}")
             continue
+
+        threads = brief.signal_quality.thread_count
+        sources = len(brief.sources)
         pick = (brief.consensus_pick or "")[:70]
-        print(f"  ok   {q}\n       -> {pick or '(no consensus)'}")
+        if threads < floor or sources < floor:
+            print(
+                f"  FAIL {q}\n"
+                f"       {threads} threads / {sources} sources — below the floor of "
+                f"{floor}. The corpus can no longer answer this query in full; "
+                f"recapture, or check that selection only picks recorded threads.\n"
+                f"       note: {brief.signal_quality.bias_notes[:120]}"
+            )
+            continue
+        print(
+            f"  ok   {q}\n"
+            f"       {threads} threads / {sources} sources / {brief.confidence.value}\n"
+            f"       -> {pick or '(no consensus)'}"
+        )
         ok += 1
 
-    print(f"\n{ok}/{len(DEMO_QUERIES)} demo queries replay from fixtures alone")
+    print(f"\n{ok}/{len(DEMO_QUERIES)} demo queries replay from fixtures with usable evidence")
     return 0 if ok == len(DEMO_QUERIES) else 1
 
 

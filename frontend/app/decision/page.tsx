@@ -2,13 +2,33 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, ResearchBrief } from "../../lib/api";
+import { api, DiscoveredThread, ResearchBrief } from "../../lib/api";
 import { Sources } from "../../components/Sources";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Badge } from "../../components/ui/Badge";
 import { Banner } from "../../components/ui/Banner";
 import { Input, Textarea, Field } from "../../components/ui/Input";
+
+/** Plain English for how completely each discussion was held. Mirrors the
+ *  backend's Acquisition levels; an unknown level is shown as-is rather than
+ *  hidden, because silently dropping provenance is the failure this prevents. */
+const ACQUISITION_LABELS: Record<string, [string, string]> = {
+  full_browser: ["full discussion", "full discussions"],
+  recorded_full: ["recorded discussion", "recorded discussions"],
+  search_preview: ["search preview", "search previews"],
+  reddit_oauth: ["full discussion", "full discussions"],
+};
+
+function provenanceLine(acquisition: Record<string, number>): string {
+  const parts = Object.entries(acquisition)
+    .filter(([, n]) => n > 0)
+    .map(([level, n]) => {
+      const [one, many] = ACQUISITION_LABELS[level] ?? [level, level];
+      return `${n} ${n === 1 ? one : many}`;
+    });
+  return parts.length ? `Analysed ${parts.join(" and ")}.` : "";
+}
 
 /** Turn a consensus sentence into a short, searchable store query. */
 function searchSeed(pick: string): string {
@@ -30,6 +50,55 @@ export default function DecisionPage() {
   const [elapsed, setElapsed] = useState(0);
   const [actOutcome, setActOutcome] = useState<string | null>(null);
   const [acting, setActing] = useState(false);
+  // Live community discovery: which discussions exist, and which the user
+  // wants weighed. Separate from `brief` because choosing the evidence comes
+  // before producing a verdict from it.
+  const [found, setFound] = useState<DiscoveredThread[] | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [discovering, setDiscovering] = useState(false);
+
+  async function discover(q: string) {
+    if (!q.trim() || discovering) return;
+    setDiscovering(true);
+    setError(null);
+    setBrief(null);
+    setFound(null);
+    try {
+      const res = await api.discover(q.trim());
+      setFound(res.results);
+      setPicked(new Set(res.results.filter((r) => r.preselected).map((r) => r.thread_id)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  async function analyseSelected() {
+    if (!found || loading) return;
+    const chosen = found.filter((t) => picked.has(t.thread_id));
+    if (!chosen.length) return;
+    setLoading(true);
+    setError(null);
+    setBrief(null);
+    setElapsed(0);
+    try {
+      setBrief(await api.analyseSelected(query.trim(), chosen, setElapsed));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function togglePick(id: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function executePurchase() {
     if (!brief || acting) return;
@@ -126,11 +195,96 @@ export default function DecisionPage() {
               placeholder="Budget, constraints, your situation"
             />
           </Field>
-          <Button type="submit" disabled={loading || !query.trim()} className="w-fit">
-            {loading ? "Researching…" : "Research"}
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button type="submit" disabled={loading || !query.trim()} className="w-fit">
+              {loading ? "Researching…" : "Research"}
+            </Button>
+            {/* Live discovery: find current discussions and let the user pick
+                which ones are weighed, before anything expensive runs. */}
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => discover(query)}
+              disabled={discovering || !query.trim()}
+              className="w-fit"
+            >
+              {discovering ? "Finding discussions…" : "Find live discussions"}
+            </Button>
+          </div>
         </form>
       </Card>
+
+      {found && (
+        <Card className="p-6 mb-8">
+          <div className="flex items-baseline justify-between mb-4">
+            <h2 className="text-lg">Live community evidence</h2>
+            <span className="text-sm text-ink-subtle">
+              {found.length} discussion{found.length === 1 ? "" : "s"} found
+            </span>
+          </div>
+
+          {found.length === 0 ? (
+            <p className="text-sm text-ink-subtle">
+              No current discussions were found for this question.
+            </p>
+          ) : (
+            <>
+              <ul className="grid gap-3 mb-5">
+                {found.map((t) => (
+                  <li key={t.thread_id} className="flex gap-3 items-start">
+                    <input
+                      type="checkbox"
+                      id={`t-${t.thread_id}`}
+                      checked={picked.has(t.thread_id)}
+                      onChange={() => togglePick(t.thread_id)}
+                      className="mt-1"
+                    />
+                    <label htmlFor={`t-${t.thread_id}`} className="grid gap-1 cursor-pointer">
+                      <span className="leading-snug">{t.title}</span>
+                      <span className="text-xs text-ink-subtle">
+                        {t.subreddit ? `r/${t.subreddit}` : "reddit"}
+                        {" · "}
+                        <a
+                          href={t.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Open Reddit ↗
+                        </a>
+                      </span>
+                      {t.snippet && (
+                        <span className="text-sm text-ink-subtle line-clamp-2">{t.snippet}</span>
+                      )}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+
+              {/* Say plainly what will actually be read. A snippet is not a
+                  conversation, and the extension is how it becomes one. */}
+              <Banner tone="info" className="mb-4">
+                These are search previews. Laeria cannot open Reddit itself — open a
+                discussion and use the browser extension&apos;s{" "}
+                <strong>Send this discussion to Laeria</strong> to have the full
+                conversation analysed instead of the preview.
+              </Banner>
+
+              <Button
+                type="button"
+                onClick={analyseSelected}
+                disabled={loading || picked.size === 0}
+                className="w-fit"
+              >
+                {loading
+                  ? "Analysing…"
+                  : `Analyse ${picked.size} discussion${picked.size === 1 ? "" : "s"}`}
+              </Button>
+            </>
+          )}
+        </Card>
+      )}
 
       {loading && (
         <Banner tone="info" className="mb-6">
@@ -201,6 +355,12 @@ function BriefCard({ brief }: { brief: ResearchBrief }) {
           {sq.subreddits_checked.map((s) => `r/${s}`).join(", ")}
           {sq.date_range ? ` · ${sq.date_range}` : ""}
         </p>
+        {/* Say what was actually read. A search preview is a title and a
+            snippet, not a conversation, and a reader who assumes otherwise has
+            been misled by omission. */}
+        {sq.acquisition && Object.keys(sq.acquisition).length > 0 && (
+          <p className="text-[13px] text-ink-subtle mt-1">{provenanceLine(sq.acquisition)}</p>
+        )}
       </Card>
 
       <ListSection title="What users praise" items={brief.strengths} tone="success" />

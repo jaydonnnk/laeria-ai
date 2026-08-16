@@ -85,6 +85,13 @@ class SignalQuality(BaseModel):
     thread_count: int = 0
     date_range: str = ""
     bias_notes: str = ""
+    # How completely each analysed discussion was held, counted by level —
+    # e.g. {"full_browser": 3, "search_preview": 2}. Provenance, not judgement:
+    # it exists so the UI can say "3 full discussions and 2 search previews"
+    # instead of letting a preview look like a whole conversation. Nothing
+    # reads it to weight evidence, and confidence does not consult it.
+    # Defaults empty, so every existing brief validates unchanged.
+    acquisition: dict[str, int] = Field(default_factory=dict)
 
 
 class ResearchBrief(BaseModel):
