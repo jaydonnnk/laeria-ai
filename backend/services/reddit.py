@@ -60,6 +60,13 @@ _BASE = "https://old.reddit.com"
 # hammering it invites the 403 wall for the whole IP.
 _MIN_REQUEST_GAP_SECONDS = 1.5
 
+# The exact request `get_thread_with_comments` makes. Named once because
+# `has_recorded_thread` must ask about the SAME request the fetch will make —
+# a fixture key is the path plus these params, so two copies that drift apart
+# would report "recorded" for a thread that then fails to load.
+_THREAD_PATH = "/comments/{id}/"
+_THREAD_PARAMS = {"limit": "100", "sort": "top"}
+
 
 class FixtureMissing(RuntimeError):
     """No recorded answer exists for this request in `fixture` mode.
@@ -98,6 +105,12 @@ class RedditService:
             follow_redirects=True,
             proxy=proxy,
         )
+        # Has ANY request in this service's life been answered from the
+        # recorded corpus rather than the network? Set by `_get`, read by the
+        # research agent, which must not select a thread the corpus cannot
+        # serve. Per-instance and write-once-True, so the concurrent search
+        # fan-out cannot race it into a wrong value.
+        self.served_from_corpus = False
 
     # ---- HTTP layer ----
 
@@ -183,7 +196,13 @@ class RedditService:
                     response=httpx.Response(status, request=request),
                 )
             body = fx.load(path, params)
-            return self._replayed(path, params, body) if body is not None else None
+            if body is None:
+                return None
+            # One place, so every replay path is flagged: below there are three
+            # separate returns and flagging them individually is how one gets
+            # forgotten.
+            self.served_from_corpus = True
+            return self._replayed(path, params, body)
 
         if mode == "fixture":
             replayed = replay_or_none()
@@ -378,7 +397,7 @@ class RedditService:
     ) -> RedditThread:
         """Fetch full thread: reliable score, selftext, top-level comments
         sorted by top. One request."""
-        resp = self._get(f"/comments/{thread_id}/", params={"limit": "100", "sort": "top"})
+        resp = self._get(_THREAD_PATH.format(id=thread_id), params=dict(_THREAD_PARAMS))
         soup = BeautifulSoup(resp.text, "lxml")
 
         post = soup.select_one("div.thing.link")
@@ -425,6 +444,19 @@ class RedditService:
             author_account_age_days=None,
             top_comments=comments,
         )
+
+    def has_recorded_thread(self, thread_id: str) -> bool:
+        """Would `get_thread_with_comments(thread_id)` be servable from the
+        recorded corpus?
+
+        Only meaningful while replaying. A search page lists far more threads
+        than a capture ever fetched in full, so on a frozen corpus most
+        candidates have a search-page entry and no thread body — and picking
+        one spends a budget slot on a fetch that cannot succeed.
+        """
+        from services import reddit_fixtures as fx
+
+        return fx.has(_THREAD_PATH.format(id=thread_id), dict(_THREAD_PARAMS))
 
     def apply_signal_filters(
         self,
