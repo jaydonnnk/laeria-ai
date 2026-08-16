@@ -44,7 +44,16 @@ app = FastAPI(
 # set CORS_ORIGINS to the Vercel domain in production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins.split(",") if settings.cors_origins else ["*"],
+    # Forgiving parse: strip whitespace and a trailing slash off each origin, so
+    # "https://app.vercel.app/" or " https://app.vercel.app" still match the
+    # browser's Origin header (which never carries a path or trailing slash).
+    # An origin mismatch here silently drops the CORS header and blocks the whole
+    # frontend — a footgun worth defusing.
+    allow_origins=(
+        [o.strip().rstrip("/") for o in settings.cors_origins.split(",") if o.strip()]
+        if settings.cors_origins
+        else ["*"]
+    ),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
