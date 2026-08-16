@@ -64,20 +64,6 @@ def load(path: str, params: dict | None) -> str | None:
     return f.read_text(encoding="utf-8")
 
 
-def has(path: str, params: dict | None) -> bool:
-    """Is a body recorded for this exact request?
-
-    Same key as `load`, but answers the question without reading the file —
-    the caller wants to know whether a fetch WOULD succeed, not what it says.
-
-    This exists so a selection step can ask "can the corpus actually serve
-    this?" before spending a thread budget on it. Choosing a thread whose full
-    HTML was never captured costs the whole slot: the fetch raises
-    FixtureMissing, `_fetch_threads` drops it, and the corpus silently shrinks.
-    """
-    return (FIXTURE_DIR / f"{key_for(path, params)}.html").exists()
-
-
 def load_error(path: str, params: dict | None) -> int | None:
     """Recorded HTTP failure status for this request, if it failed at capture.
 
