@@ -32,6 +32,7 @@ interface ActiveCard {
   wallet: string;
   amountSgd: number;
   production: boolean;
+  cardHtml?: string;
 }
 
 function fromRow(row: CardRow): ActiveCard | null {
@@ -83,7 +84,13 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
         .filter((c): c is ActiveCard => c !== null);
       // Prefer the newest persisted card (carries the correct env for the
       // explorer link); fall back to whatever we hold if none is stored yet.
-      setActive((cur) => straits[0] ?? cur);
+      setActive((cur) => {
+        const next = straits[0];
+        if (!next) return cur;
+        return cur?.cardOpaqueId === next.cardOpaqueId
+          ? { ...next, cardHtml: cur.cardHtml }
+          : next;
+      });
     } catch {
       /* leave whatever we have */
     }
@@ -113,8 +120,8 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
         settlementTx: res.settlement_tx,
         wallet: walletAddress,
         amountSgd: Number(res.amount_sgd ?? amount),
-        // The chain we signed on tells production from sandbox.
-        production: false, // refined by loadCards from the persisted env
+        production: res.card_env === "production",
+        cardHtml: res.card_html,
       });
       setIframe(null);
       await loadCards();
@@ -133,6 +140,7 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
       const v = await api.cardView(active.cardOpaqueId, active.settlementTx, active.wallet,
         active.production ? "production" : "sandbox");
       setIframe(v.iframe_url ?? null);
+      setActive((cur) => cur ? { ...cur, cardHtml: v.card_html ?? cur.cardHtml } : cur);
     } catch (e) {
       setErr(errMsg(e));
     } finally {
@@ -158,7 +166,8 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
         variant_id: variant.trim(),
         card_amount_sgd: active.amountSgd,
         card_env: active.production ? "production" : "sandbox",
-      });
+        card_html: active.cardHtml,
+      }, (seconds) => setBusy(`Buying — checkout running ${Math.round(seconds)}s…`));
       setOrder({ total: o.total_usd, ref: o.order_reference, test: o.pan_shim });
     } catch (e) {
       setErr(errMsg(e));

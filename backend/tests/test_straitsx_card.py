@@ -68,3 +68,21 @@ def test_parse_card_html_refuses_when_no_pan():
     """A checkout with no card number is a failure, not a blank submission."""
     with pytest.raises(sx.StraitsXCardError):
         sx.parse_card_html("<div class='card'><div class='cvv_val'>123</div></div>")
+
+
+def test_view_card_routes_tool_and_sse_to_card_env(monkeypatch):
+    seen = {}
+
+    def fake_mcp_call(tool, arguments, *, timeout=30.0, env=None):
+        seen.update(tool=tool, arguments=arguments, timeout=timeout, env=env)
+        return {"card_html": _CARD_HTML}
+
+    monkeypatch.setattr(sx, "_mcp_call", fake_mcp_call)
+
+    out = sx.mcp_view_card("opaque", "0xsettlement", "0x" + "11" * 20,
+                           env="production")
+
+    assert out["card_html"] == _CARD_HTML
+    assert seen["tool"] == "view_card_prod"
+    assert seen["env"] == "production"
+    assert seen["arguments"]["card_opaque_id"] == "opaque"

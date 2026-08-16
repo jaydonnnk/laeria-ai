@@ -33,7 +33,9 @@ export async function issueCard(opts: {
   onStep?.("Waiting for signature…");
   const sig = await signTypedData(walletAddress, challenge.typed_data);
   onStep?.("Settling on-chain…");
-  return api.cardIssue(challenge, sig);
+  const issued = await api.cardIssue(challenge, sig);
+  const cardEnv = issued.card_env ?? (chainId === 43114 ? "production" : "sandbox");
+  return { ...issued, card_env: cardEnv };
 }
 
 /** The whole leg for a pending-signature action: issue a card sized to the
@@ -57,5 +59,7 @@ export async function issueAndBuy(opts: {
     variant_id: opts.variantId,
     card_amount_sgd: Number(card.amount_sgd ?? opts.amountSgd),
     action_id: opts.actionId,
-  });
+    card_env: card.card_env,
+    card_html: card.card_html,
+  }, (seconds) => opts.onStep?.(`Buying — checkout running ${Math.round(seconds)}s…`));
 }
