@@ -29,6 +29,28 @@ os.environ["BEDROCK_GUARDRAILS_ENABLED"] = "false"
 # silently picking up the developer's own instance credentials.
 os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
 
+# THE SUITE OWNS ITS REDDIT MODE.
+#
+# `Settings` reads backend/.env, so without this the result of a test run
+# depends on whichever mode the developer last set for a demo. That is not
+# hypothetical: setting REDDIT_SOURCE=fixture turned 15 guardrail tests red,
+# because in fixture mode the research agent raises NoRecordedPlan for a query
+# the corpus never captured and returns an empty brief BEFORE any guardrail
+# code runs — so the assertions had nothing to observe and the failure looked
+# like a security regression.
+#
+# Pinned to the code default rather than to `fixture`: tests inject fakes for
+# RedditService, so nothing here reaches the network, and this keeps the suite
+# measuring the path production actually takes. A test that wants replay says
+# so itself with monkeypatch.setenv + get_settings.cache_clear().
+os.environ["REDDIT_SOURCE"] = "live_then_fixture"
+
+# Discovery is an outbound HTTP call to a search provider. Absent a key the
+# provider is a no-op, but pinning it empty means a developer's real key can
+# never be spent by a test run.
+os.environ["DISCOVERY_PROVIDER"] = "none"
+os.environ["DISCOVERY_API_KEY"] = ""
+
 from core.config import get_settings  # noqa: E402
 from services.bedrock_guardrails import get_guardrails  # noqa: E402
 
@@ -37,4 +59,7 @@ get_guardrails.cache_clear()
 
 assert get_settings().bedrock_guardrails_enabled is False, (
     "the test suite must run with Bedrock guardrails disabled"
+)
+assert get_settings().reddit_source == "live_then_fixture", (
+    "the test suite must control its own Reddit mode, not inherit it from .env"
 )

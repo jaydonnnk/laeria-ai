@@ -129,7 +129,7 @@ def build_weights(
     user = topic_terms(query)
     planner = set().union(*(topic_terms(q) for q in search_queries)) if search_queries else set()
 
-    docs = [title_terms(t.title) for t in candidates]
+    docs = [_matchable(t) for t in candidates]
     n = len(docs) or 1
     weights = {}
     for term in user | planner:
@@ -139,14 +139,39 @@ def build_weights(
     return weights
 
 
-def score(thread: RedditThread, weights: dict[str, float]) -> float:
-    """Total weight of the DISTINCT query terms this title contains.
+# How much body text a thread may contribute to matching. A search snippet is
+# a couple of sentences; this is generous enough to hold one and short enough
+# that a long selftext cannot swamp the title it belongs to.
+_BODY_MATCH_CHARS = 400
 
-    Title only, because that is all a search page gives us — `_parse_search_page`
-    never populates `body`, and the full text does not exist until the expensive
-    fetch this score is deciding whether to spend.
+
+def _matchable(thread: RedditThread) -> set[str]:
+    """Terms a thread can be matched on: its title, plus the head of its body.
+
+    Title alone was right while the only source was a Reddit search page, which
+    never populates `body`. A discovery provider returns a snippet instead — it
+    IS the body we hold — and a preview whose title is "Anyone tried these?"
+    matches nothing at all unless the snippet is read.
+
+    Reading the head of the body is therefore free on the existing paths (there
+    `body` is empty at selection time, so this is byte-for-byte the old
+    behaviour) and is the difference between ranking and guessing on the new
+    one. Bounded because relevance must stay a judgement about the subject, not
+    a reward for writing at length.
+    """
+    terms = title_terms(thread.title)
+    if thread.body:
+        terms |= title_terms(thread.body[:_BODY_MATCH_CHARS])
+    return terms
+
+
+def score(thread: RedditThread, weights: dict[str, float]) -> float:
+    """Total weight of the DISTINCT query terms this thread's text contains.
+
+    Distinct on purpose: a term counts once whether it appears in the title, in
+    the snippet, or ten times in both, so padding a post cannot buy rank.
     """
     if not weights:
         return 0.0
-    have = title_terms(thread.title)
+    have = _matchable(thread)
     return sum(w for term, w in weights.items() if term in have)

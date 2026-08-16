@@ -50,6 +50,22 @@ class Settings(BaseSettings):
     # scraping work. Empty = direct connection (fine on a residential IP).
     # Format: "http://user:pass@host:port" or "socks5://host:port".
     reddit_proxy: str = ""
+    # Live discovery of community discussions via a WEB SEARCH provider.
+    # Reddit itself is never contacted by the backend — the provider tells us
+    # which discussions exist and the user decides which to read. "none" (the
+    # default) disables discovery and says so rather than searching silently.
+    # See services/discovery.py.
+    discovery_provider: str = "none"      # none | brave | tavily
+    discovery_api_key: str = ""
+    discovery_base_url: str = ""          # override for a self-hosted/proxy endpoint
+    # How many discussions to ask the provider for before ranking. Ranking
+    # then narrows to what the user is shown, so this is the width of the
+    # funnel, not the number of things read.
+    discovery_candidates: int = 12
+    # Browser-supplied thread content is held only long enough for the user to
+    # press "analyse". Never written to disk.
+    ingest_ttl_seconds: int = 3600
+
     # Where Reddit HTML comes from: "live" | "record" | "fixture" |
     # "live_then_fixture". Reddit is closing logged-out old.reddit access
     # (announced 2026-06-30, rolling out over the following month), so a live

@@ -361,6 +361,127 @@ class ResearchAgent:
             )
         return safe, screened.text
 
+    # ---- Mode 2b: research over discussions the USER chose ----
+
+    def synthesise_selected(
+        self,
+        query: str,
+        candidates: list[dict],
+        user_id: str = "",
+    ) -> ResearchBrief:
+        """Research a set of discussions the user picked from live discovery.
+
+        `candidates` are the rows `/research/discover` returned and the user
+        ticked: each carries a thread id, a title and the search snippet. What
+        Laeria actually holds for each one is decided here, best first:
+
+          1. the full page, if the user sent it from their browser
+          2. the full thread, if this exact discussion is in the recorded corpus
+          3. the search preview — title and snippet, and nothing pretended
+
+        A preview is thin evidence and is meant to read that way. It is NOT
+        given a different confidence rule, a handicap, or a bonus: it goes into
+        the same corpus, through the same guardrail, to the same prompt, and
+        the synthesis reaches whatever conclusion that much text supports. One
+        confidence system, told honestly what it is looking at.
+        """
+        from services.bedrock_guardrails import INPUT
+
+        query = self._guard.ensure_allowed(query, INPUT, "research query")
+        threads, provenance = self._acquire(candidates, user_id)
+        if not threads:
+            return _empty_brief(
+                [], "None of the selected discussions could be read."
+            )
+
+        subreddits = sorted({t.subreddit for t in threads if t.subreddit})
+        # NO engagement filtering here, deliberately.
+        #
+        # `apply_signal_filters` exists to prune a pool the MACHINE assembled
+        # from a search: with dozens of candidates and no human judgement, it
+        # is right to drop the ones nobody upvoted. This path is the opposite
+        # situation — a person read these titles and ticked these boxes, so
+        # discarding their choice because a thread has few upvotes overrules
+        # the user with a heuristic built for a different problem.
+        #
+        # It also silently deleted the preview tier. A search preview carries
+        # no score and no comment count, so the filter's relaxed branch
+        # ("keep anything with real engagement") dropped every preview the
+        # moment one browser-supplied thread was present — measured: three
+        # acquired discussions reached synthesis as one. Dedupe already
+        # happened in `_acquire`, which is the part that was actually needed.
+        filtered = threads
+
+        # Boundary 2, unchanged. User-supplied transport does not make a
+        # stranger's comment trustworthy.
+        filtered, safe_text = self._guard_threads(filtered)
+        if not filtered:
+            return _empty_brief(
+                subreddits,
+                "The discussions were read, but the safety layer rejected all "
+                "of them, so none could be used.",
+            )
+
+        brief = self._synthesise(
+            query, filtered, subreddits, safe_text,
+            provenance={t.id: provenance[t.id] for t in filtered if t.id in provenance},
+        )
+        return brief
+
+    def _acquire(
+        self, candidates: list[dict], user_id: str
+    ) -> tuple[list[RedditThread], dict[str, object]]:
+        """Best available content for each selected discussion, with how we got
+        it. Order is deliberate: browser, then corpus, then preview."""
+        from services import ingest
+        from services.discovery import Acquisition, Candidate, to_thread
+
+        threads: list[RedditThread] = []
+        provenance: dict[str, object] = {}
+        seen: set[str] = set()
+
+        for row in candidates:
+            tid = str(row.get("thread_id") or "").strip()
+            if not tid or tid in seen:
+                continue
+            seen.add(tid)
+
+            supplied = ingest.get(user_id, tid) if user_id else None
+            if supplied is not None:
+                threads.append(supplied)
+                provenance[tid] = Acquisition.FULL_BROWSER
+                continue
+
+            if getattr(self._reddit, "has_recorded_thread", None) and \
+                    self._reddit.has_recorded_thread(tid):
+                try:
+                    threads.append(self._reddit.get_thread_with_comments(tid))
+                    provenance[tid] = Acquisition.RECORDED_FULL
+                    continue
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("recorded thread %s unreadable: %s", tid, exc)
+
+            preview = to_thread(
+                Candidate(
+                    thread_id=tid,
+                    url=str(row.get("url") or ""),
+                    title=str(row.get("title") or ""),
+                    snippet=str(row.get("snippet") or ""),
+                    subreddit=str(row.get("subreddit") or ""),
+                )
+            )
+            if not (preview.title or preview.body):
+                continue  # nothing to reason over; drop rather than pad
+            threads.append(preview)
+            provenance[tid] = Acquisition.SEARCH_PREVIEW
+
+        logger.info(
+            "acquired %d of %d selected discussions (%s)",
+            len(threads), len(candidates),
+            ", ".join(f"{k}={v}" for k, v in _count_levels(provenance).items()) or "none",
+        )
+        return threads, provenance
+
     # ---- Mode 2 (Phase 1) ----
 
     def synthesise_decision(
@@ -475,6 +596,7 @@ class ResearchAgent:
         #    Weights are derived from the candidates themselves, so they have
         #    to be built here rather than once per process: a term is scored by
         #    how rare it is in THIS pool.
+        candidates = self._servable(candidates)
         weights = relevance.build_weights(query, search_queries, candidates)
         chosen = _spread_pick(candidates, thread_budget, weights)
         logger.info(
@@ -484,9 +606,18 @@ class ResearchAgent:
 
         # 4. Fetch full threads (expensive part), then signal-filter.
         full_threads = self._fetch_threads(chosen)
+        # A fetch failure and a filter rejection are different outcomes and
+        # need different words. `apply_signal_filters` CANNOT empty a non-empty
+        # list — its relaxed path ends in `or unique` — so reporting "none
+        # passed signal filters" here blamed the filters for what was really
+        # every fetch failing, and sent debugging to the wrong stage.
+        if not full_threads:
+            return _empty_brief(subreddits, _unreadable_note(len(chosen), self._replaying()))
         filtered = self._reddit.apply_signal_filters(full_threads)
         if not filtered:
-            return _empty_brief(subreddits, "Threads found but none passed signal filters.")
+            return _empty_brief(
+                subreddits, "Threads were read but none passed the signal filters."
+            )
         # `apply_signal_filters` returns its survivors in engagement order,
         # which would undo the ranking above for the one thing corpus order
         # decides: the model reads "Thread 1" with the most attention. The
@@ -511,6 +642,49 @@ class ResearchAgent:
         return brief
 
     # ---- internals ----
+
+    def _replaying(self) -> bool:
+        """Is this run being answered by the recorded corpus rather than the
+        network? Read defensively: a test double for RedditService need not
+        carry the flag, and absent it the answer is "no", which leaves every
+        behaviour below exactly as it was."""
+        return bool(getattr(self._reddit, "served_from_corpus", False))
+
+    def _servable(self, candidates: list[RedditThread]) -> list[RedditThread]:
+        """In PURE REPLAY, keep only candidates the corpus can serve in full.
+
+        Deliberately narrow in scope. A frozen corpus holds the search pages
+        plus the full text of whichever threads the selector picked AT CAPTURE
+        TIME; change how selection ranks and the new picks are threads whose
+        body was never captured, so every fetch fails and the corpus silently
+        collapses. Narrowing the pool first prevents that.
+
+        It applies ONLY when replay is the whole story. This is not the
+        live-primary architecture and must not become it: on the live path the
+        corpus is a per-thread fallback (see `_acquire`), not a filter on what
+        the user is allowed to be shown.
+        """
+        from core.config import get_settings
+
+        if get_settings().reddit_source != "fixture" or not self._replaying():
+            return candidates
+        available = [
+            t for t in candidates
+            if getattr(self._reddit, "has_recorded_thread", None)
+            and self._reddit.has_recorded_thread(t.id)
+        ]
+        if not available:
+            logger.warning(
+                "replaying: none of the %d candidates have a recorded full thread",
+                len(candidates),
+            )
+            return candidates
+        if len(available) < len(candidates):
+            logger.info(
+                "replaying: %d of %d candidates have a recorded full thread",
+                len(available), len(candidates),
+            )
+        return available
 
     def _fetch_threads(self, chosen: list[RedditThread]) -> list[RedditThread]:
         """Full thread+comment fetches, overlapped.
@@ -585,6 +759,7 @@ class ResearchAgent:
         threads: list[RedditThread],
         subreddits: list[str],
         safe_text: dict[str, str] | None = None,
+        provenance: dict[str, object] | None = None,
     ) -> ResearchBrief:
         from agents.signal_analysis import analyse_threads
 
@@ -595,6 +770,15 @@ class ResearchAgent:
         threads, machine_warnings = analyse_threads(
             threads, self._llm, _safe_views(safe_text or {})
         )
+        # Tell the model what it is actually holding. A search preview is two
+        # sentences, not a conversation, and a model shown five previews should
+        # know it is reasoning about five previews. This is a statement of
+        # fact, not an instruction to lower confidence — the existing rules
+        # already say thin coverage means low confidence, and adding a second
+        # nudge here would be putting a thumb on the scale.
+        provenance_note = _provenance_note(provenance or {})
+        if provenance_note:
+            machine_warnings = [*machine_warnings, provenance_note]
         corpus = _build_corpus(threads)
         analysis_block = (
             "\n\nAUTOMATED SIGNAL ANALYSIS (machine-generated, factor into "
@@ -705,6 +889,11 @@ class ResearchAgent:
                 thread_count=len(threads),
                 date_range=date_range,
                 bias_notes=raw.get("bias_notes", ""),
+                acquisition=_count_levels(
+                    {t.id: lvl for t, lvl in
+                     ((t, (provenance or {}).get(t.id)) for t in threads)
+                     if lvl is not None}
+                ),
             ),
             sources=_to_sources(threads),
         )
@@ -1027,6 +1216,67 @@ def _safe_confidence(value: object) -> ConfidenceLevel:
         return ConfidenceLevel(str(value).lower())
     except ValueError:
         return ConfidenceLevel.LOW
+
+
+def _in_chosen_order(
+    threads: list[RedditThread], chosen: list[RedditThread]
+) -> list[RedditThread]:
+    """`threads` reordered to follow `chosen`, membership unchanged.
+
+    Anything not in `chosen` keeps its place at the end rather than being
+    dropped — this restores an order, and must never be able to lose evidence.
+    """
+    rank = {t.id: i for i, t in enumerate(chosen)}
+    return sorted(threads, key=lambda t: rank.get(t.id, len(rank)))
+
+
+def _count_levels(provenance: dict) -> dict[str, int]:
+    """Acquisition levels tallied by name, for the brief and the logs."""
+    counts: dict[str, int] = {}
+    for level in provenance.values():
+        key = getattr(level, "value", str(level))
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _provenance_note(provenance: dict) -> str:
+    """One plain sentence telling the model how complete its evidence is."""
+    if not provenance:
+        return ""
+    counts = _count_levels(provenance)
+    phrase = {
+        "full_browser": "full discussions supplied by the user's browser",
+        "recorded_full": "full discussions from the recorded corpus",
+        "search_preview": (
+            "SEARCH PREVIEWS ONLY — a title and a short snippet, not the "
+            "conversation; no comments were available for these"
+        ),
+        "reddit_oauth": "full discussions from the Reddit API",
+    }
+    parts = [f"{n} {phrase.get(k, k)}" for k, n in counts.items()]
+    return "Evidence completeness: " + "; ".join(parts) + "."
+
+
+def _unreadable_note(selected: int, replaying: bool) -> str:
+    """Why a run that FOUND discussions still has nothing to synthesise.
+
+    Names the stage that actually failed. The two causes need opposite
+    responses — a corpus gap is fixed by recapturing, an upstream refusal is
+    fixed by waiting — and one message for both hides which one happened.
+    """
+    if replaying:
+        return (
+            f"{selected} discussions were selected, but none could be read from "
+            "the recorded corpus — this question's discussions were not captured "
+            "in full. This is a gap in the recording, not a problem with your "
+            "question."
+        )
+    return (
+        f"{selected} discussions were selected, but none could be fetched, so "
+        "there was nothing to read. Reddit restricts automated access from "
+        "hosted servers; open a discussion in your browser and send it to "
+        "Laeria to analyse it."
+    )
 
 
 def _empty_brief(subreddits: list[str], note: str) -> ResearchBrief:

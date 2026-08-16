@@ -432,9 +432,159 @@
     `);
   }
 
+  // ---- Reddit discussions the user chooses to share ---------------------
+  //
+  // Reddit refuses automated access from hosted servers, and Laeria does not
+  // work around that: the backend never requests reddit.com. But the person
+  // reading this page has ordinary access to it, and if they want a discussion
+  // weighed they can hand it over — which is what pasting the text would do,
+  // with fewer keystrokes.
+  //
+  // THE RULES THIS FILE KEEPS, and they are not negotiable:
+  //   * nothing is read until the user clicks. Detection looks at the URL only.
+  //   * only THIS page. No link following, no other threads, no navigation.
+  //   * only what is already rendered. No scrolling, no "load more", no
+  //     fetches, no pagination.
+  //   * no credentials, no cookies, no session data. The page's visible text
+  //     and nothing else.
+
+  const REDDIT_THREAD = /^\/(?:r\/([A-Za-z0-9_]{2,21})\/)?comments\/([a-z0-9]{4,12})(?:\/|$)/;
+
+  /** Is this a Reddit discussion page? URL only — reads no content. */
+  function detectRedditThread() {
+    if (!/(^|\.)reddit\.com$/.test(location.hostname)) return null;
+    const m = REDDIT_THREAD.exec(location.pathname);
+    if (!m) return null;
+    return { subreddit: m[1] || "", threadId: m[2], url: location.href };
+  }
+
+  const textOf = (el) => (el?.textContent || "").replace(/\s+/g, " ").trim();
+  const digits = (s) => {
+    // "1.2k points" -> 1200. Reddit abbreviates; a wrong number here is
+    // cosmetic (the backend clamps and never trusts it), so this stays simple.
+    const m = /([\d.,]+)\s*([km])?/i.exec(s || "");
+    if (!m) return null;
+    const n = parseFloat(m[1].replace(/,/g, ""));
+    if (Number.isNaN(n)) return null;
+    const mult = { k: 1e3, m: 1e6 }[(m[2] || "").toLowerCase()] || 1;
+    return Math.round(n * mult);
+  };
+
+  /**
+   * Read the discussion already on screen. Called ONLY from the pill's click
+   * handler — never on load, never on a timer.
+   *
+   * Both Reddit front-ends are handled because the user may be on either, and
+   * asking them to switch to reach a feature is the kind of instruction people
+   * ignore. Selectors are best-effort: a miss yields less text, never an
+   * error, and the backend treats every field as optional anyway.
+   */
+  function captureRedditThread(meta) {
+    const isOld = /(^|\.)old\.reddit\.com$/.test(location.hostname) ||
+      Boolean(document.querySelector("div.thing.link"));
+
+    let title = "", body = "", author = "", score = null, numComments = null;
+    const comments = [];
+
+    if (isOld) {
+      const post = document.querySelector("div.thing.link");
+      title = textOf(post?.querySelector("a.title")) || textOf(document.querySelector("h1"));
+      body = textOf(document.querySelector("div.expando div.usertext-body"));
+      author = post?.getAttribute("data-author") || "";
+      score = digits(post?.getAttribute("data-score"));
+      numComments = digits(post?.getAttribute("data-comments-count"));
+
+      for (const c of document.querySelectorAll(
+        "div.commentarea > div.sitetable > div.thing.comment"
+      )) {
+        const a = c.getAttribute("data-author") || "";
+        if (a === "AutoModerator" || a === "[deleted]") continue;
+        const text = textOf(c.querySelector("div.usertext-body"));
+        if (!text) continue;
+        comments.push({ body: text, author: a, score: digits(textOf(c.querySelector("span.score.unvoted"))) });
+        if (comments.length >= 40) break;
+      }
+    } else {
+      const post = document.querySelector("shreddit-post");
+      title =
+        post?.getAttribute("post-title") ||
+        textOf(document.querySelector("h1")) ||
+        document.title.replace(/\s*:\s*r\/.*$/, "");
+      body = textOf(
+        document.querySelector('[slot="text-body"]') ||
+          document.querySelector('[data-post-click-location="text-body"]')
+      );
+      author = post?.getAttribute("author") || "";
+      score = digits(post?.getAttribute("score"));
+      numComments = digits(post?.getAttribute("comment-count"));
+
+      for (const c of document.querySelectorAll("shreddit-comment")) {
+        // Top-level only: depth="0". Nested replies triple the volume and add
+        // little the parent does not already say.
+        if ((c.getAttribute("depth") || "0") !== "0") continue;
+        const a = c.getAttribute("author") || "";
+        if (a === "AutoModerator" || a === "[deleted]") continue;
+        const text = textOf(c.querySelector('[slot="comment"]') || c);
+        if (!text) continue;
+        comments.push({ body: text.slice(0, 4000), author: a, score: digits(c.getAttribute("score")) });
+        if (comments.length >= 40) break;
+      }
+    }
+
+    return {
+      url: meta.url,
+      title: title.slice(0, 400),
+      body: body.slice(0, 40000),
+      author: author.slice(0, 64),
+      score,
+      num_comments: numComments,
+      comments,
+    };
+  }
+
+  async function sendRedditThread(meta) {
+    renderCard(`
+      <div class="head"><div class="eyebrow">sending to laeria</div></div>
+      <div class="muted">Reading this discussion…</div>
+    `);
+    // Extraction happens HERE, after the click — not at page load.
+    const payload = captureRedditThread(meta);
+    if (!payload.title && !payload.body && !payload.comments.length) {
+      return renderError("Nothing readable on this page yet — let it finish loading.", () =>
+        sendRedditThread(meta)
+      );
+    }
+
+    const res = await send({ type: "SEND_REDDIT_THREAD", thread: payload });
+    if (!res?.ok) return renderError(res?.error || "could not send", () => sendRedditThread(meta));
+
+    const d = res.data;
+    renderCard(`
+      <div class="head">
+        <div class="eyebrow">sent to laeria</div>
+        <button class="x" title="Close">&times;</button>
+      </div>
+      <div class="sec">
+        <div>${esc(d.title || "This discussion")}</div>
+        <div class="eyebrow">r/${esc(d.subreddit || meta.subreddit)} · ${d.comments_captured} comment${
+          d.comments_captured === 1 ? "" : "s"
+        } captured</div>
+      </div>
+      <div class="foot">
+        <span>full discussion</span>
+        <a href="https://laeria-ai.vercel.app/decision" target="_blank" rel="noreferrer">analyse in laeria ↗</a>
+      </div>
+    `);
+  }
+
   // ---- entry ------------------------------------------------------------
 
   function start() {
+    const thread = detectRedditThread();
+    if (thread) {
+      // A pill, not an action. Nothing is read unless this is clicked.
+      return renderPill("Send this discussion to Laeria", () => sendRedditThread(thread));
+    }
     const order = detectOrder();
     if (order) {
       const n = order.items.length;

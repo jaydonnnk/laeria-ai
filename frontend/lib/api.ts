@@ -125,6 +125,23 @@ export interface SignalQuality {
   thread_count: number;
   date_range: string;
   bias_notes: string;
+  /** How completely each analysed discussion was held, counted by level —
+   *  e.g. { full_browser: 3, search_preview: 2 }. Provenance for display, so a
+   *  search preview is never shown as if it were the whole conversation. */
+  acquisition?: Record<string, number>;
+}
+
+/** One discussion live discovery found. A preview until the user supplies more. */
+export interface DiscoveredThread {
+  thread_id: string;
+  title: string;
+  url: string;
+  subreddit: string;
+  snippet: string;
+  published: string;
+  provenance: string;
+  relevance: number;
+  preselected: boolean;
 }
 
 export interface ResearchBrief {
@@ -173,6 +190,37 @@ export const api = {
     runJob<ResearchBrief>(
       "/research/decision/submit",
       { query, context, thread_budget },
+      onProgress
+    ),
+
+  // Live community discovery. Cheap and side-effect free: one web-search call,
+  // no synthesis, no payment, and no request to Reddit — the backend cannot
+  // reach it and does not try. Returns discussions for the user to choose from.
+  discover: (query: string, limit = 6) =>
+    request<{ query: string; provider: string; results: DiscoveredThread[] }>(
+      "/research/discover",
+      { method: "POST", body: JSON.stringify({ query, limit }) }
+    ),
+
+  // Research the discussions the user ticked. Long-running, so job-based like
+  // every other research entry point.
+  analyseSelected: (
+    query: string,
+    threads: DiscoveredThread[],
+    onProgress?: (seconds: number) => void
+  ) =>
+    runJob<ResearchBrief>(
+      "/research/analyse/submit",
+      {
+        query,
+        threads: threads.map((t) => ({
+          thread_id: t.thread_id,
+          title: t.title,
+          url: t.url,
+          subreddit: t.subreddit,
+          snippet: t.snippet,
+        })),
+      },
       onProgress
     ),
 

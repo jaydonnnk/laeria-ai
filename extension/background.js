@@ -154,6 +154,22 @@ async function cacheVerdict(key, brief) {
 // ---- message router -----------------------------------------------------
 
 const HANDLERS = {
+  // A Reddit discussion the user pressed "send" on. The content script has
+  // already read the page they were looking at; this only forwards it, because
+  // the token lives here and nowhere else.
+  //
+  // Laeria's backend cannot fetch Reddit — hosted servers are refused — so this
+  // is how a fresh discussion becomes evidence. The server validates the URL,
+  // bounds the payload and screens every word through Bedrock before any model
+  // sees it: arriving via the user's browser makes the transport legitimate,
+  // not the content trustworthy.
+  async SEND_REDDIT_THREAD({ thread }) {
+    return api("/research/ingest", {
+      method: "POST",
+      body: JSON.stringify(thread),
+    });
+  },
+
   async AUTH_STATUS() {
     const { session } = await chrome.storage.local.get("session");
     const cfg = await getConfig();
