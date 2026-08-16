@@ -207,7 +207,12 @@ class StorefrontService:
     # ---- Browser layer (Playwright) ----
 
     def _launch_kwargs(self) -> dict:
-        kwargs: dict = {"headless": not self._settings.browser_headed}
+        from services.checkout import CHROMIUM_ARGS
+
+        kwargs: dict = {
+            "headless": not self._settings.browser_headed,
+            "args": CHROMIUM_ARGS,
+        }
         if self._settings.playwright_channel == "chrome":
             kwargs["channel"] = "chrome"
         return kwargs

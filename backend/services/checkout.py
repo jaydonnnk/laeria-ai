@@ -37,6 +37,19 @@ _SCREENSHOT_DIR = Path(__file__).resolve().parent.parent / "screenshots" / "chec
 
 _BOGUS_SUCCESS_PAN = "1"
 
+# Memory-frugal Chromium flags for constrained containers. --disable-dev-shm-usage
+# is the load-bearing one: /dev/shm is tiny in most containers, and without this
+# Chromium crashes (or the process is OOM-killed) partway through a heavy page,
+# which surfaces as a checkout that hangs with no response. --no-sandbox is
+# required in many container runtimes. These shrink the footprint but do NOT make
+# a 512MB instance enough — Chromium on a Shopify checkout wants ~1GB+.
+CHROMIUM_ARGS = [
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-extensions",
+]
+
 
 class CheckoutError(RuntimeError):
     pass
@@ -185,7 +198,10 @@ def execute_checkout(
         except Exception as exc:  # noqa: BLE001
             logger.warning("checkout screenshot %s failed: %s", name, exc)
 
-    launch_kwargs: dict = {"headless": not settings.browser_headed}
+    launch_kwargs: dict = {
+        "headless": not settings.browser_headed,
+        "args": CHROMIUM_ARGS,
+    }
     if settings.playwright_channel == "chrome":
         launch_kwargs["channel"] = "chrome"
 
