@@ -130,7 +130,8 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
     setErr(null);
     try {
       setBusy("Fetching card…");
-      const v = await api.cardView(active.cardOpaqueId, active.settlementTx, active.wallet);
+      const v = await api.cardView(active.cardOpaqueId, active.settlementTx, active.wallet,
+        active.production ? "production" : "sandbox");
       setIframe(v.iframe_url ?? null);
     } catch (e) {
       setErr(errMsg(e));
@@ -156,6 +157,7 @@ export function StraitsXCardPanel({ refreshKey }: { refreshKey?: number }) {
         product_handle: handle.trim(),
         variant_id: variant.trim(),
         card_amount_sgd: active.amountSgd,
+        card_env: active.production ? "production" : "sandbox",
       });
       setOrder({ total: o.total_usd, ref: o.order_reference, test: o.pan_shim });
     } catch (e) {

@@ -66,24 +66,31 @@ def _env() -> str:
     return env
 
 
-def _tool_suffix() -> str:
-    """The MCP tool-name suffix for the current env. NOTE: production's tools are
-    `get_card_prod` / `view_card_prod` — 'prod', not 'production'. The env value
-    stays 'production' (config + explorer link); only the tool name is 'prod'."""
-    return "prod" if _env() == "production" else "sandbox"
+def _tool_suffix(env: str | None = None) -> str:
+    """The MCP tool-name suffix for the given env (defaults to the configured
+    one). NOTE: production's tools are `get_card_prod` / `view_card_prod` —
+    'prod', not 'production'. The env value stays 'production' (config + explorer
+    link); only the tool name is 'prod'."""
+    return "prod" if (env or _env()) == "production" else "sandbox"
 
 
 # ---- MCP-over-SSE (thin JSON-RPC client) ----
 
 
-def _mcp_call(tool: str, arguments: dict, *, timeout: float = 30.0) -> dict:
+def _mcp_call(tool: str, arguments: dict, *, timeout: float = 30.0, env: str | None = None) -> dict:
     """Open the SSE stream, initialize, call one tool, return its parsed result.
+
+    `env` targets a specific StraitsX environment (sandbox/production); it
+    defaults to the configured one. Passing it explicitly matters when viewing a
+    card that was ISSUED in a different env than the backend is currently set to
+    — the same Supabase holds cards from both, so the view must follow the card's
+    own env or the issuer finds nothing.
 
     The SSE transport streams the reply on the GET channel while requests go out
     on a separate POST to the session's message URL, so we read the stream in a
     thread and post alongside it.
     """
-    env = _env()
+    env = env or _env()
     sse_url = f"{_HOST}/{env}/sse"
     q: queue.Queue = queue.Queue()
     holder: dict = {}
@@ -155,14 +162,16 @@ def mcp_get_card(wallet_address: str, cardholder_name: str, amount_sgd: float) -
     })
 
 
-def mcp_view_card(card_opaque_id: str, settlement_tx: str, wallet_address: str) -> dict:
+def mcp_view_card(card_opaque_id: str, settlement_tx: str, wallet_address: str,
+                  env: str | None = None) -> dict:
     """One-time iframe URL + rendered card_html for an issued card. Ownership is
-    checked server-side against the paying wallet."""
-    return _mcp_call(f"view_card_{_tool_suffix()}", {
+    checked server-side against the paying wallet. `env` follows the card's own
+    environment when it differs from the backend's current one."""
+    return _mcp_call(f"view_card_{_tool_suffix(env)}", {
         "card_opaque_id": card_opaque_id,
         "settlement_tx": settlement_tx,
         "wallet_address": wallet_address,
-    })
+    }, env=env)
 
 
 import re as _re
@@ -199,14 +208,19 @@ def parse_card_html(html: str) -> dict:
     }
 
 
-def card_credentials(card_opaque_id: str, settlement_tx: str, wallet_address: str) -> dict:
+def card_credentials(card_opaque_id: str, settlement_tx: str, wallet_address: str,
+                     env: str | None = None) -> dict:
     """Fetch an issued card's live credentials by viewing it and parsing the
     rendered card_html. One-time per view — call it at checkout time, use it,
-    discard it. Never persist the result."""
-    view = mcp_view_card(card_opaque_id, settlement_tx, wallet_address)
+    discard it. Never persist the result. `env` must match the env the card was
+    ISSUED in (the same Supabase holds both), or the issuer returns no card."""
+    view = mcp_view_card(card_opaque_id, settlement_tx, wallet_address, env=env)
     html = view.get("card_html") or ""
     if not html:
-        raise StraitsXCardError("view_card returned no card_html to parse")
+        # Surface what the issuer actually said — usually an ownership/env
+        # mismatch or a rate limit, which "no card_html" alone hides.
+        msg = view.get("message") or view.get("error") or view.get("text") or view
+        raise StraitsXCardError(f"view_card returned no card_html (issuer said: {msg})")
     return parse_card_html(html)
 
 

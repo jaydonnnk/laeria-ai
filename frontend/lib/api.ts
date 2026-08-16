@@ -328,10 +328,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ challenge, signature }),
     }),
-  cardView: (card_opaque_id: string, settlement_tx: string, wallet_address: string) =>
+  cardView: (card_opaque_id: string, settlement_tx: string, wallet_address: string, card_env?: string) =>
     request<CardView>("/cards/straitsx/view", {
       method: "POST",
-      body: JSON.stringify({ card_opaque_id, settlement_tx, wallet_address }),
+      body: JSON.stringify({ card_opaque_id, settlement_tx, wallet_address, card_env }),
     }),
   // Buy a real product with an issued card: reads the card, drives the merchant
   // checkout, ships to the Profile address. Slow (real browser checkout).
@@ -343,6 +343,7 @@ export const api = {
     variant_id: string;
     card_amount_sgd: number;
     action_id?: string;
+    card_env?: string;
   }) => request<CardCheckoutResult>("/cards/straitsx/checkout", {
     method: "POST",
     body: JSON.stringify(body),

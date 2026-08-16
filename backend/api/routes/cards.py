@@ -57,6 +57,9 @@ class CardViewRequest(BaseModel):
     card_opaque_id: str = Field(min_length=1)
     settlement_tx: str = Field(min_length=1)
     wallet_address: str = Field(min_length=42, max_length=42)
+    # The env the card was issued in, when it differs from the backend's current
+    # one (the same Supabase holds sandbox + production cards).
+    card_env: str | None = None
 
 
 @router.post("/straitsx/challenge")
@@ -116,7 +119,8 @@ def straitsx_view(req: CardViewRequest) -> dict:
     import services.straitsx_card as sx
 
     try:
-        return sx.mcp_view_card(req.card_opaque_id, req.settlement_tx, req.wallet_address)
+        return sx.mcp_view_card(req.card_opaque_id, req.settlement_tx, req.wallet_address,
+                                env=req.card_env)
     except sx.StraitsXCardError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -134,6 +138,9 @@ class CardCheckoutRequest(BaseModel):
     # Optional: the pending_signature action this fulfils. When set, a successful
     # checkout marks that action executed and records the receipt on it.
     action_id: str | None = None
+    # The env the card was issued in (sandbox/production), when it differs from
+    # the backend's current one — the view must follow the card's own env.
+    card_env: str | None = None
 
 
 @router.post("/straitsx/checkout")
@@ -179,7 +186,8 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
 
     logger.info("straitsx_checkout: [2/4] reading card credentials (MCP view_card)")
     try:
-        creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address)
+        creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address,
+                                    env=req.card_env)
     except sx.StraitsXCardError as exc:
         raise HTTPException(status_code=502, detail=f"could not read card: {exc}") from exc
     card = CardDetails(
