@@ -66,6 +66,13 @@ def _env() -> str:
     return env
 
 
+def _tool_suffix() -> str:
+    """The MCP tool-name suffix for the current env. NOTE: production's tools are
+    `get_card_prod` / `view_card_prod` — 'prod', not 'production'. The env value
+    stays 'production' (config + explorer link); only the tool name is 'prod'."""
+    return "prod" if _env() == "production" else "sandbox"
+
+
 # ---- MCP-over-SSE (thin JSON-RPC client) ----
 
 
@@ -141,7 +148,7 @@ def _mcp_call(tool: str, arguments: dict, *, timeout: float = 30.0) -> dict:
 def mcp_get_card(wallet_address: str, cardholder_name: str, amount_sgd: float) -> dict:
     """Ask the issuer to prepare a card. Returns its instruction payload
     (cardapi url + x402 note). No money moves here."""
-    return _mcp_call(f"get_card_{_env()}", {
+    return _mcp_call(f"get_card_{_tool_suffix()}", {
         "wallet_address": wallet_address,
         "cardholder_name": cardholder_name,
         "amount_sgd": amount_sgd,
@@ -151,7 +158,7 @@ def mcp_get_card(wallet_address: str, cardholder_name: str, amount_sgd: float) -
 def mcp_view_card(card_opaque_id: str, settlement_tx: str, wallet_address: str) -> dict:
     """One-time iframe URL + rendered card_html for an issued card. Ownership is
     checked server-side against the paying wallet."""
-    return _mcp_call(f"view_card_{_env()}", {
+    return _mcp_call(f"view_card_{_tool_suffix()}", {
         "card_opaque_id": card_opaque_id,
         "settlement_tx": settlement_tx,
         "wallet_address": wallet_address,
