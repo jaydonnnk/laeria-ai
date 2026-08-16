@@ -13,8 +13,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from core.config import get_settings
+from core.logging import get_logger
 from db import repositories as repo
 from services.cards import get_issuer
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/cards", tags=["cards"])
 
@@ -152,6 +155,7 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
     from services.storefront import StorefrontService
 
     store = StorefrontService()
+    logger.info("straitsx_checkout: [1/4] verifying product %s", req.product_handle)
     try:
         verification = store.verify_product(req.product_handle)
     except Exception as exc:  # noqa: BLE001
@@ -161,6 +165,7 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
     price = float(verification.get("price_usd") or 0)
     if price <= 0:
         raise HTTPException(status_code=502, detail="could not read a live product price")
+    logger.info("straitsx_checkout: [1/4] product ok, price %.2f", price)
 
     # The card is prepaid in SGD; the store prices in its own currency. Compared
     # 1:1 like the rest of the build (no FX invented) — the checkout's own total
@@ -172,6 +177,7 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
             detail=f"product price {price:.2f} exceeds the card's {ceiling:.2f} balance",
         )
 
+    logger.info("straitsx_checkout: [2/4] reading card credentials (MCP view_card)")
     try:
         creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address)
     except sx.StraitsXCardError as exc:
@@ -181,6 +187,7 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
         exp_month=creds["exp_month"], exp_year=creds["exp_year"],
         brand="Visa", name=creds["name"] or "Laeria Agent",
     )
+    logger.info("straitsx_checkout: [3/4] card read (…%s), driving checkout", card.number[-4:])
 
     try:
         result = execute_checkout(
@@ -196,6 +203,8 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
     except Exception as exc:  # noqa: BLE001
         _fail_action(req.action_id, str(exc))
         raise HTTPException(status_code=502, detail=f"checkout failed: {exc}") from exc
+    logger.info("straitsx_checkout: [4/4] ordered %s total %.2f",
+                result.order_reference, result.total_usd)
 
     receipt = {
         "rail": "straitsx_card",
