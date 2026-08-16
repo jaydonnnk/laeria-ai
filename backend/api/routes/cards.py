@@ -62,6 +62,11 @@ class CardViewRequest(BaseModel):
     card_env: str | None = None
 
 
+class JobAccepted(BaseModel):
+    job_id: str
+    status: str = "pending"
+
+
 @router.post("/straitsx/challenge")
 def straitsx_challenge(req: CardChallengeRequest) -> dict:
     """Prepare a card purchase: ask the issuer, trigger the 402, and return the
@@ -110,7 +115,7 @@ def straitsx_issue(req: CardIssueRequest) -> dict:
         )
     except Exception:  # noqa: BLE001 - the card exists on-chain; a DB miss must not 500
         pass
-    return result
+    return {**result, "card_env": get_settings().straitsx_card_env}
 
 
 @router.post("/straitsx/view")
@@ -141,6 +146,9 @@ class CardCheckoutRequest(BaseModel):
     # The env the card was issued in (sandbox/production), when it differs from
     # the backend's current one — the view must follow the card's own env.
     card_env: str | None = None
+    # Transient card_html returned by issuance/view. This is never persisted; it
+    # avoids spending a second one-time view when checkout immediately follows.
+    card_html: str | None = None
 
 
 @router.post("/straitsx/checkout")
@@ -186,8 +194,11 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
 
     logger.info("straitsx_checkout: [2/4] reading card credentials (MCP view_card)")
     try:
-        creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address,
-                                    env=req.card_env)
+        if req.card_html:
+            creds = sx.parse_card_html(req.card_html)
+        else:
+            creds = sx.card_credentials(req.card_opaque_id, req.settlement_tx, req.wallet_address,
+                                        env=req.card_env)
     except sx.StraitsXCardError as exc:
         raise HTTPException(status_code=502, detail=f"could not read card: {exc}") from exc
     card = CardDetails(
@@ -225,7 +236,7 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
         "settlement_tx": req.settlement_tx,
         "card_opaque_id": req.card_opaque_id,
         # So the UI links the right explorer (Fuji vs C-Chain) for the tx.
-        "env": get_settings().straitsx_card_env,
+        "env": req.card_env or get_settings().straitsx_card_env,
     }
     if req.action_id:
         try:
@@ -245,6 +256,41 @@ def straitsx_checkout(req: CardCheckoutRequest) -> dict:
         "screenshots": result.screenshots,
         "product_handle": req.product_handle,
         "card_opaque_id": req.card_opaque_id,
+    }
+
+
+@router.post("/straitsx/checkout/submit", status_code=202)
+def submit_straitsx_checkout(req: CardCheckoutRequest) -> JobAccepted:
+    """Run checkout in a background job.
+
+    Shopify checkout can outlive common proxy request limits, and Chromium can
+    fail in ways that leave a single fetch looking "stuck". The browser should
+    submit, then poll this job instead of holding one long request open.
+    """
+    from services import jobs
+
+    job_id = jobs.submit(
+        straitsx_checkout,
+        req,
+        label=f"straitsx checkout: {req.product_handle[:60]}",
+    )
+    return JobAccepted(job_id=job_id)
+
+
+@router.get("/jobs/{job_id}")
+def get_card_job(job_id: str) -> dict:
+    from services import jobs
+
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown or expired job")
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "label": job.get("label", ""),
+        "elapsed_seconds": job.get("elapsed_seconds", 0),
+        "result": job.get("result"),
+        "error": job.get("error"),
     }
 
 

@@ -82,7 +82,8 @@ const POLL_TIMEOUT_MS = 8 * 60 * 1000;
 async function runJob<T>(
   submitPath: string,
   body: unknown,
-  onProgress?: (seconds: number) => void
+  onProgress?: (seconds: number) => void,
+  pollBase = "/research/jobs"
 ): Promise<T> {
   const { job_id } = await request<{ job_id: string }>(submitPath, {
     method: "POST",
@@ -92,7 +93,7 @@ async function runJob<T>(
   const deadline = Date.now() + POLL_TIMEOUT_MS;
   for (;;) {
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    const job = await request<JobState<T>>(`/research/jobs/${job_id}`);
+    const job = await request<JobState<T>>(`${pollBase}/${job_id}`);
     onProgress?.(job.elapsed_seconds);
 
     if (job.status === "done") {
@@ -344,10 +345,14 @@ export const api = {
     card_amount_sgd: number;
     action_id?: string;
     card_env?: string;
-  }) => request<CardCheckoutResult>("/cards/straitsx/checkout", {
-    method: "POST",
-    body: JSON.stringify(body),
-  }),
+    card_html?: string;
+  }, onProgress?: (seconds: number) => void) =>
+    runJob<CardCheckoutResult>(
+      "/cards/straitsx/checkout/submit",
+      body,
+      onProgress,
+      "/cards/jobs"
+    ),
 
   // Audit-trail screenshots need the auth header, so <img src> can't load
   // them directly — fetch as a blob and hand back an object URL.
@@ -455,6 +460,7 @@ export interface CardIssueResult {
   iframe_url?: string;
   amount_sgd?: string;
   card_html?: string;
+  card_env?: "sandbox" | "production";
   message?: string;
 }
 
