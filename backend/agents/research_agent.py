@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
+from agents import relevance
 from core.logging import get_logger
 from core.models import (
     ConfidenceLevel,
@@ -467,17 +468,31 @@ class ResearchAgent:
             )
             return _empty_brief(subreddits, note)
 
-        # 3. Choose which threads to actually read: engagement-ranked,
+        # 3. Choose which threads to actually read: how directly a candidate
+        #    answers THIS question first, engagement to break ties, still
         #    spread across subreddits so one sub doesn't dominate.
-        chosen = _spread_pick(candidates, thread_budget)
+        #
+        #    Weights are derived from the candidates themselves, so they have
+        #    to be built here rather than once per process: a term is scored by
+        #    how rare it is in THIS pool.
+        weights = relevance.build_weights(query, search_queries, candidates)
+        chosen = _spread_pick(candidates, thread_budget, weights)
+        logger.info(
+            "selected %d of %d candidates across %d subreddit(s)",
+            len(chosen), len(candidates), len({t.subreddit for t in chosen}),
+        )
 
         # 4. Fetch full threads (expensive part), then signal-filter.
-        #    Results are collected in `chosen` order rather than completion
-        #    order, so the corpus handed to the LLM stays engagement-ranked.
         full_threads = self._fetch_threads(chosen)
         filtered = self._reddit.apply_signal_filters(full_threads)
         if not filtered:
             return _empty_brief(subreddits, "Threads found but none passed signal filters.")
+        # `apply_signal_filters` returns its survivors in engagement order,
+        # which would undo the ranking above for the one thing corpus order
+        # decides: the model reads "Thread 1" with the most attention. The
+        # filter's own judgement about WHICH threads survive is untouched —
+        # only their order is restored to the one selection chose.
+        filtered = _in_chosen_order(filtered, chosen)
 
         # Boundary 2: other people's text, before it becomes model context.
         # A refused thread is left out and the run continues on the rest.
@@ -861,25 +876,74 @@ def _engagement_key(t: RedditThread) -> int:
     return t.score + t.num_comments
 
 
-def _spread_pick(candidates: list[RedditThread], budget: int) -> list[RedditThread]:
-    """Pick up to `budget` threads, round-robin across subreddits in
-    engagement order, so one big subreddit doesn't crowd out the others."""
-    by_sub: dict[str, list[RedditThread]] = {}
-    for t in sorted(candidates, key=_engagement_key, reverse=True):
-        by_sub.setdefault(t.subreddit, []).append(t)
+def _spread_pick(
+    candidates: list[RedditThread],
+    budget: int,
+    weights: dict[str, float] | None = None,
+) -> list[RedditThread]:
+    """Pick up to `budget` threads to read in full.
 
+    Threads that say something about the question come first, round-robin
+    across subreddits so one big community cannot crowd out the others;
+    engagement breaks ties between equally relevant threads. Threads matching
+    nothing in the query are the last resort, in engagement order.
+
+    Relevance has to lead. Ranked on engagement alone this returned eight
+    threads for a Koss KSC75 question of which none mentioned the KSC75, while
+    seven that did went unread — and the round-robin made it worse rather than
+    better, since handing every subreddit a guaranteed slot spends that slot on
+    the sub's most POPULAR thread whichever question was asked. That is how a
+    marketing case study (22 pts, 0 comments) and "college cups" (1 pt) reached
+    a corpus about rechargeable batteries and a water bottle.
+
+    `weights` absent — no query context — scores everything zero, which leaves
+    one tier ordered by engagement and makes this function byte-for-byte the
+    one it replaced. The change is a refinement, not a replacement.
+    """
+    scored = [(relevance.score(t, weights or {}), t) for t in candidates]
     picked: list[RedditThread] = []
     seen_ids: set[str] = set()
-    while len(picked) < budget and any(by_sub.values()):
-        for sub in list(by_sub):
-            if by_sub[sub] and len(picked) < budget:
-                t = by_sub[sub].pop(0)
-                if t.id not in seen_ids:
-                    seen_ids.add(t.id)
-                    picked.append(t)
-            if not by_sub[sub]:
-                del by_sub[sub]
+
+    # Relevance decides which TIER a candidate is in; the round-robin runs
+    # inside a tier. Both tiers get one, so cross-community corroboration
+    # survives even when nothing matched the query and the fallback is all
+    # there is — that spread is what `_coverage_note` reports on and what the
+    # synthesis prompt weighs, so it must not depend on relevance succeeding.
+    relevant = sorted(
+        (st for st in scored if st[0] > 0),
+        key=lambda st: (-st[0], -_engagement_key(st[1])),
+    )
+    # Loosely-related threads keep a thin corpus rather than none: an honest
+    # brief over weak evidence beats an empty one, and saying the coverage is
+    # thin is the synthesis prompt's job, not this function's.
+    rest = sorted((st for st in scored if st[0] <= 0), key=lambda st: -_engagement_key(st[1]))
+
+    for tier in (relevant, rest):
+        by_sub: dict[str, list[RedditThread]] = {}
+        for _, t in tier:
+            by_sub.setdefault(t.subreddit, []).append(t)
+        while len(picked) < budget and any(by_sub.values()):
+            for sub in list(by_sub):
+                if by_sub[sub] and len(picked) < budget:
+                    t = by_sub[sub].pop(0)
+                    if t.id not in seen_ids:
+                        seen_ids.add(t.id)
+                        picked.append(t)
+                if not by_sub[sub]:
+                    del by_sub[sub]
     return picked
+
+
+def _in_chosen_order(
+    threads: list[RedditThread], chosen: list[RedditThread]
+) -> list[RedditThread]:
+    """`threads` reordered to follow `chosen`, membership unchanged.
+
+    Anything not in `chosen` keeps its place at the end rather than being
+    dropped — this restores an order, and must never be able to lose evidence.
+    """
+    rank = {t.id: i for i, t in enumerate(chosen)}
+    return sorted(threads, key=lambda t: rank.get(t.id, len(rank)))
 
 
 def _build_corpus(threads: list[RedditThread]) -> str:
