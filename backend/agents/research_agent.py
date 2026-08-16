@@ -475,6 +475,7 @@ class ResearchAgent:
         #    Weights are derived from the candidates themselves, so they have
         #    to be built here rather than once per process: a term is scored by
         #    how rare it is in THIS pool.
+        candidates = self._servable(candidates)
         weights = relevance.build_weights(query, search_queries, candidates)
         chosen = _spread_pick(candidates, thread_budget, weights)
         logger.info(
@@ -484,9 +485,18 @@ class ResearchAgent:
 
         # 4. Fetch full threads (expensive part), then signal-filter.
         full_threads = self._fetch_threads(chosen)
+        # A fetch failure and a filter rejection are different outcomes and
+        # need different words. `apply_signal_filters` CANNOT empty a non-empty
+        # list — its relaxed path ends in `or unique` — so reporting "none
+        # passed signal filters" here blamed the filters for what was really
+        # every fetch failing, and sent debugging at the wrong stage.
+        if not full_threads:
+            return _empty_brief(subreddits, _unreadable_note(len(chosen), self._replaying()))
         filtered = self._reddit.apply_signal_filters(full_threads)
         if not filtered:
-            return _empty_brief(subreddits, "Threads found but none passed signal filters.")
+            return _empty_brief(
+                subreddits, "Threads were read but none passed the signal filters."
+            )
         # `apply_signal_filters` returns its survivors in engagement order,
         # which would undo the ranking above for the one thing corpus order
         # decides: the model reads "Thread 1" with the most attention. The
@@ -511,6 +521,54 @@ class ResearchAgent:
         return brief
 
     # ---- internals ----
+
+    def _replaying(self) -> bool:
+        """Is this run being answered by the recorded corpus rather than live
+        Reddit? Read defensively: a test double for RedditService need not
+        carry the flag, and absent it the answer is "no" — which leaves every
+        behaviour below exactly as it was."""
+        return bool(getattr(self._reddit, "served_from_corpus", False))
+
+    def _servable(self, candidates: list[RedditThread]) -> list[RedditThread]:
+        """On a replayed run, keep only candidates the corpus can serve in full.
+
+        A frozen corpus holds the search pages plus the full text of whichever
+        threads the selector picked AT CAPTURE TIME. Change how selection
+        ranks — as the relevance ranking did — and the new picks are threads
+        whose search-page entry exists but whose body was never captured. Every
+        such pick spends a budget slot on a fetch that raises FixtureMissing,
+        and the corpus silently collapses: measured on this corpus, eight
+        selections became one surviving thread.
+
+        So on replay the pool is narrowed FIRST and the ordinary relevance
+        ranking then runs over what is actually available. Ranking is not
+        bypassed and no older selector is restored — the corpus just stops
+        offering threads it cannot deliver.
+
+        LIVE runs are untouched: the flag is false, and this returns the list
+        unchanged.
+
+        If nothing is available the full list is returned rather than an empty
+        one. Narrowing to nothing would trade an explainable "these could not
+        be read" for a misleading "no threads found".
+        """
+        if not self._replaying():
+            return candidates
+        available = [
+            t for t in candidates if self._reddit.has_recorded_thread(t.id)
+        ]
+        if not available:
+            logger.warning(
+                "replaying: none of the %d candidates have a recorded full "
+                "thread — the corpus cannot answer this query", len(candidates),
+            )
+            return candidates
+        if len(available) < len(candidates):
+            logger.info(
+                "replaying: %d of %d candidates have a recorded full thread",
+                len(available), len(candidates),
+            )
+        return available
 
     def _fetch_threads(self, chosen: list[RedditThread]) -> list[RedditThread]:
         """Full thread+comment fetches, overlapped.
@@ -1027,6 +1085,27 @@ def _safe_confidence(value: object) -> ConfidenceLevel:
         return ConfidenceLevel(str(value).lower())
     except ValueError:
         return ConfidenceLevel.LOW
+
+
+def _unreadable_note(selected: int, replaying: bool) -> str:
+    """Why a run that FOUND threads still has nothing to synthesise.
+
+    Names the stage that actually failed. The two causes need opposite
+    responses — a corpus gap is fixed by recapturing, an upstream refusal is
+    fixed by waiting — and one message for both hides which one happened.
+    """
+    if replaying:
+        return (
+            f"{selected} threads were selected, but none could be read from the "
+            "recorded corpus — this question's discussions were not captured in "
+            "full. This is a gap in the recording, not a problem with your "
+            "question."
+        )
+    return (
+        f"{selected} threads were selected, but none could be fetched from "
+        "Reddit, so there was nothing to read. This is an upstream access "
+        "problem, not a problem with your question."
+    )
 
 
 def _empty_brief(subreddits: list[str], note: str) -> ResearchBrief:
